@@ -10,7 +10,8 @@
     "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../../.env --watch dist/index.js",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "test": "npm run build && node --test \"test/*.test.js\""
+    "test": "npm run build && node --test \"test/*.test.js\"",
+    "verify:unsplash": "node scripts/verify-unsplash.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

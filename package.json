@@ -19,6 +19,7 @@
     "dev:glasses": "npm run dev -w @g2/glasses",
     "pack:glasses": "npm run pack -w @g2/glasses",
     "test": "npm run test -w @g2/server && npm run test -w @g2/glasses",
-    "dev": "npm run dev -w @g2/server"
+    "dev": "npm run dev -w @g2/server",
+    "verify:unsplash": "npm run verify:unsplash -w @g2/server"
   }
 }
