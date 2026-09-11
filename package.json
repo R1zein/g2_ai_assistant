@@ -1,0 +1,24 @@
+{
+  "name": "g2-ai-assistant",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Advanced Claude-powered AI assistant for Even Realities G2 smart glasses (Even Hub), integrated with Gmail, Google Calendar, location and notifications.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @g2/shared && npm run build -w @g2/server && npm run build -w @g2/glasses",
+    "typecheck": "npm run typecheck -w @g2/shared && npm run typecheck -w @g2/server && npm run typecheck -w @g2/glasses",
+    "dev:server": "npm run dev -w @g2/server",
+    "dev:glasses": "npm run dev -w @g2/glasses",
+    "pack:glasses": "npm run pack -w @g2/glasses",
+    "test": "npm run test -w @g2/server && npm run test -w @g2/glasses",
+    "dev": "npm run dev -w @g2/server"
+  }
+}

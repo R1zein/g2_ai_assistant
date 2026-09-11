@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>AI Assistant</title>
+  </head>
+  <body>
+    <!--
+      This page is the phone-side surface inside the Even App WebView. The
+      glasses render their own containers; everything here is the control panel
+      the wearer sees when they look at their phone.
+    -->
+    <main id="app" class="panel">
+      <header class="head">
+        <h1>AI Assistant</h1>
+        <span id="status-pill" class="pill">starting…</span>
+      </header>
+      <section id="content" class="content"></section>
+      <footer class="foot">
+        <button id="btn-ask" type="button" class="btn primary">Ask</button>
+        <button id="btn-agenda" type="button" class="btn">Agenda</button>
+        <button id="btn-sync" type="button" class="btn">Sync mail</button>
+      </footer>
+      <pre id="log" class="log" aria-live="polite"></pre>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

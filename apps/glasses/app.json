@@ -1,0 +1,25 @@
+{
+  "package_id": "com.g2assistant.hud",
+  "edition": "202601",
+  "name": "AI Assistant",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.15",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Talks to the assistant server, which holds the Google and Anthropic credentials.",
+      "whitelist": ["https://assistant.example.com"]
+    },
+    {
+      "name": "location",
+      "desc": "Answers questions about what is nearby and whether you can still make a booking on time."
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Hold the touchpad to ask a question out loud."
+    }
+  ],
+  "supported_languages": ["en", "de", "fr", "es", "it"]
+}

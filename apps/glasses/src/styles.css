@@ -1,0 +1,123 @@
+/*
+ * Phone-side panel. Follows the Even app design tokens so the plugin does not
+ * look like a foreign object inside Even Hub.
+ */
+:root {
+  color-scheme: light dark;
+  --text: #232323;
+  --text-dim: #7b7b7b;
+  --bg: #ffffff;
+  --surface: #eeeeee;
+  --input-bg: rgba(35, 35, 35, 0.08);
+  --accent: #fef991;
+  --danger: #d14343;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #ffffff;
+    --text-dim: #8a8a8a;
+    --bg: #111111;
+    --surface: #1a1a1a;
+    --input-bg: rgba(255, 255, 255, 0.08);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.panel { max-width: 640px; margin: 0 auto; padding: 20px; }
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+h2 { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; margin: 0 0 12px; }
+
+.pill {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pill.warn { background: var(--accent); color: #232323; }
+
+.content { display: flex; flex-direction: column; gap: 16px; }
+
+.card { background: var(--surface); border-radius: 16px; padding: 16px; }
+
+.muted { color: var(--text-dim); margin: 0 0 12px; }
+.small { font-size: 13px; }
+.answer { margin: 8px 0 0; white-space: pre-wrap; }
+
+.code {
+  display: block;
+  margin: 16px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--input-bg);
+  text-align: center;
+  font: 500 20px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+.input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.list li { display: grid; grid-template-columns: 88px 1fr; gap: 4px 12px; }
+.when { color: var(--text-dim); font-size: 13px; grid-row: span 2; }
+.what { font-weight: 500; }
+
+.foot { display: flex; gap: 8px; margin-top: 24px; flex-wrap: wrap; }
+
+.btn {
+  flex: 1 1 auto;
+  min-width: 120px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: 500 16px/1 inherit;
+  cursor: pointer;
+}
+.btn.primary { background: var(--text); color: var(--bg); }
+.btn.danger { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
+.btn.block { display: block; width: 100%; text-align: center; text-decoration: none; }
+
+.log {
+  margin: 24px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text-dim);
+  font: 400 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+}
