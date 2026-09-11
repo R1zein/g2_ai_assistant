@@ -10,8 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "qr": "evenhub qr",
     "simulator": "evenhub-simulator http://localhost:5173",
-    "pack": "npm run build && evenhub pack app.json dist -o g2-ai-assistant.ehpk",
-    "test": "node --experimental-strip-types --test \"test/*.test.ts\""
+    "pack": "npm run build && node scripts/prepare-manifest.mjs && evenhub pack app.build.json dist -o g2-ai-assistant.ehpk",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\"",
+    "prepare-manifest": "node scripts/prepare-manifest.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15",

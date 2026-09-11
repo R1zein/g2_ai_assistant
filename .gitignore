@@ -8,3 +8,4 @@ data/
 *.ehpk
 .DS_Store
 .vite/
+app.build.json
