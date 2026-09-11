@@ -35,9 +35,23 @@ npm install
 
 ```bash
 cp .env.example .env
-$EDITOR .env          # ANTHROPIC_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+$EDITOR .env          # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ENCRYPTION_KEY
 npm run dev:server
 ```
+
+`ENCRYPTION_KEY` is what lets accounts store their own Anthropic key:
+
+```bash
+openssl rand -base64 32
+```
+
+Changing it later invalidates every stored key — everyone has to paste theirs
+again — so set it once and keep it.
+
+`ANTHROPIC_API_KEY` is now optional. Leave it empty and each account adds its own
+key in the phone panel, billed to them. Set it and it becomes the fallback for
+accounts that have not. `REQUIRE_USER_API_KEY=true` forces everyone onto their
+own key even when the fallback exists.
 
 Check it came up:
 
@@ -156,3 +170,7 @@ real firmware font metrics. Neither suite calls a network API.
 | Voice says "too short to hear" | The long-press was released before the mic opened. Hold, wait for "Listening", then speak. |
 | Answers show gaps instead of Cyrillic | Old firmware without the `evenroster_crylgrek` face. Set `DISPLAY_TRANSLITERATE=true`. |
 | Bookings never appear | Check `/api/sync` output in the phone panel log. Mail older than `GMAIL_BACKFILL_DAYS` is never scanned. |
+| Every question answers "no Anthropic key available" | Neither the account nor the server has one. Paste a key in the phone panel, or set `ANTHROPIC_API_KEY`. |
+| "Your stored Anthropic key could not be decrypted" | `ENCRYPTION_KEY` changed since the key was saved. Paste the key again. |
+| Saving a key returns 503 | The server has no `ENCRYPTION_KEY`. |
+| Web questions answer "turn on web in the menu" | The account is in `fast` mode. Toggle it from the glasses menu or the phone panel. |

@@ -4,7 +4,8 @@ import { BOOKING_TYPES, type Booking, type BookingType } from '@g2/shared';
 import { loadConfig } from '../config.js';
 import { logger } from '../logger.js';
 import type { MailMessage } from '../google/gmail.js';
-import { anthropic, describeApiError } from '../ai/anthropic.js';
+import type Anthropic from '@anthropic-ai/sdk';
+import { describeApiError } from '../ai/anthropic.js';
 import { EXTRACTION_SYSTEM } from '../ai/prompts.js';
 import { sha256 } from '../util/id.js';
 import { nowIso, zonedLocalToInstant } from '../util/time.js';
@@ -61,15 +62,21 @@ function buildUserMessage(message: MailMessage, fallbackZone: string): string {
   ].join('\n');
 }
 
-/** Runs the model over one email. Returns null when it is not a reservation. */
+/**
+ * Runs the model over one email. Returns null when it is not a reservation.
+ *
+ * The client is passed in rather than resolved here: a sync pass runs this
+ * hundreds of times and they all bill to the same account.
+ */
 export async function extractBooking(
+  client: Anthropic,
   message: MailMessage,
   fallbackZone: string,
 ): Promise<Extraction | null> {
   const cfg = loadConfig();
 
   try {
-    const response = await anthropic().messages.parse({
+    const response = await client.messages.parse({
       model: cfg.extractionModel,
       max_tokens: 4_000,
       output_config: {

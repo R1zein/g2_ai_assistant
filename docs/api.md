@@ -32,9 +32,16 @@ again.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/me` | Account, timezone, booking count, whether voice is configured. |
+| `GET` | `/api/me` | `AccountState`: account, timezone, booking count, voice availability, current mode, whether a personal API key is on file, and whether the assistant can answer at all. |
+| `POST` | `/api/mode` | `{ "mode": "fast" \| "deep" }` — the account default. |
+| `POST` | `/api/account/api-key` | `{ "apiKey": "sk-ant-…" }`. Validated against Anthropic, then stored encrypted. Returns `{ hasOwnApiKey, apiKeyHint }`. |
+| `DELETE` | `/api/account/api-key` | Forget the personal key and fall back to the shared one. |
 | `DELETE` | `/api/session` | Unpair this device. |
 | `POST` | `/api/account/disconnect` | Unpair, and with `{"revokeGoogle":true}` revoke the Google grant too. |
+
+The key is never returned by any endpoint — only its last four characters.
+`POST /api/account/api-key` answers `503 encryption_unavailable` when the server
+has no `ENCRYPTION_KEY`, and `400 invalid_api_key` when Anthropic rejects it.
 
 ## Data
 
@@ -51,6 +58,7 @@ again.
 {
   "text": "when do I check in?",
   "conversationId": "…",            // omit to start a thread
+  "mode": "deep",                   // omit to use the account default
   "context": {
     "location": { "latitude": 50.08, "longitude": 14.42, "accuracy": 12 },
     "timeZone": "Europe/Prague",
@@ -70,13 +78,25 @@ Response (`AssistantAnswer`):
     { "tool": "list_bookings", "summary": "Read 2 saved bookings", "ok": true, "durationMs": 41 }
   ],
   "items": [ /* AgendaItem[] */ ],
+  "sources": [
+    { "title": "Flight status", "url": "https://www.lufthansa.com/…", "host": "lufthansa.com" }
+  ],
   "meta": {
     "model": "claude-opus-5",
+    "mode": "fast",
     "inputTokens": 4821, "outputTokens": 96, "cacheReadTokens": 3900,
+    "webSearches": 0, "webFetches": 0,
     "latencyMs": 2140, "truncated": false
   }
 }
 ```
+
+`sources` is populated in `deep` mode from the pages the model actually read. It
+is empty rather than absent when a search failed — a failed `web_search_tool_result`
+carries an error object where the result array would be, and the extractor skips it.
+
+`402 no_api_key` means the account has no usable Anthropic key. The glasses show
+the message and point at the phone panel.
 
 ### `POST /api/voice`
 Same as `/api/ask`, but takes `audioBase64` — raw PCM, 16 kHz, signed 16-bit

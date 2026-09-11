@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Store } from '../store/index.js';
 import { loadConfig } from '../config.js';
 import { speechEnabled } from '../speech/index.js';
+import { encryptionAvailable } from '../util/crypto.js';
 import { registerApiRoutes } from './api.js';
 import { registerAuthRoutes } from './auth.js';
 
@@ -14,6 +15,9 @@ export function registerRoutes(app: FastifyInstance, store: Store): void {
     assistantModel: cfg.assistantModel,
     extractionModel: cfg.extractionModel,
     voiceEnabled: speechEnabled(),
+    webModeAvailable: true,
+    sharedKeyConfigured: cfg.anthropicApiKey !== '',
+    userKeysStorable: encryptionAvailable(),
     pairedUsers: store.listUsers().length,
   }));
 

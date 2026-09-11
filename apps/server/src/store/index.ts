@@ -1,4 +1,6 @@
+import type { AssistantMode } from '@g2/shared';
 import { loadConfig } from '../config.js';
+import { seal, unseal } from '../util/crypto.js';
 import { pairingCode, sessionToken, sha256, uuid } from '../util/id.js';
 import { addDays, nowIso } from '../util/time.js';
 import { JsonStore } from './jsonStore.js';
@@ -88,6 +90,52 @@ export class Store {
     Object.assign(user, patch, { updatedAt: nowIso() });
     this.backing.save();
     return user;
+  }
+
+  /**
+   * Stores the account's own Anthropic key.
+   *
+   * The caller is expected to have validated it against the API first — this
+   * only seals and records it.
+   */
+  setUserApiKey(userId: string, apiKey: string): UserRecord | undefined {
+    const user = this.backing.data.users[userId];
+    if (!user) return undefined;
+
+    user.apiKeyCipher = seal(apiKey);
+    user.apiKeyHint = apiKey.slice(-4);
+    user.apiKeySetAt = nowIso();
+    user.updatedAt = nowIso();
+    this.backing.save();
+    return user;
+  }
+
+  clearUserApiKey(userId: string): UserRecord | undefined {
+    const user = this.backing.data.users[userId];
+    if (!user) return undefined;
+
+    delete user.apiKeyCipher;
+    delete user.apiKeyHint;
+    delete user.apiKeySetAt;
+    user.updatedAt = nowIso();
+    this.backing.save();
+    return user;
+  }
+
+  /**
+   * Decrypts the account's key, or undefined when there is none.
+   *
+   * Throws only if a key is on file but cannot be opened — that means
+   * `ENCRYPTION_KEY` changed, which the caller should surface rather than
+   * silently falling back to the shared key.
+   */
+  getUserApiKey(userId: string): string | undefined {
+    const cipher = this.backing.data.users[userId]?.apiKeyCipher;
+    return cipher ? unseal(cipher) : undefined;
+  }
+
+  setMode(userId: string, mode: AssistantMode): UserRecord | undefined {
+    return this.updateUser(userId, { mode });
   }
 
   /* ---------------- pairing ---------------- */

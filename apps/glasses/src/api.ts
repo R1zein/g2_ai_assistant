@@ -1,7 +1,9 @@
 import type {
+  AccountState,
   AgendaResponse,
   ApiError,
   AssistantAnswer,
+  AssistantMode,
   AssistantNotification,
   ClientContext,
   PairPollResponse,
@@ -99,13 +101,25 @@ export class AssistantApi {
 
   /* ---------------- data ---------------- */
 
-  me(): Promise<{
-    account: { email: string; name?: string; timeZone: string };
-    lastGmailSyncAt?: string;
-    bookings: number;
-    voiceEnabled: boolean;
-  }> {
+  me(): Promise<AccountState> {
     return this.request('/api/me');
+  }
+
+  setMode(mode: AssistantMode): Promise<{ mode: AssistantMode }> {
+    return this.request('/api/mode', { method: 'POST', body: JSON.stringify({ mode }) });
+  }
+
+  setApiKey(apiKey: string): Promise<{ hasOwnApiKey: boolean; apiKeyHint?: string }> {
+    return this.request('/api/account/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ apiKey }),
+      // Validated against the Anthropic API before it is stored.
+      timeoutMs: 25_000,
+    });
+  }
+
+  clearApiKey(): Promise<{ hasOwnApiKey: boolean }> {
+    return this.request('/api/account/api-key', { method: 'DELETE' });
   }
 
   agenda(hours = 36): Promise<AgendaResponse> {
@@ -134,11 +148,18 @@ export class AssistantApi {
 
   /* ---------------- assistant ---------------- */
 
-  ask(text: string, conversationId?: string, context?: ClientContext): Promise<AssistantAnswer> {
+  ask(
+    text: string,
+    conversationId?: string,
+    context?: ClientContext,
+    mode?: AssistantMode,
+  ): Promise<AssistantAnswer> {
     return this.request('/api/ask', {
       method: 'POST',
-      body: JSON.stringify({ text, conversationId, context }),
-      timeoutMs: 60_000,
+      body: JSON.stringify({ text, conversationId, context, mode }),
+      // `deep` mode waits on web round-trips, so this sits above the server's
+      // own 90s deep-mode budget.
+      timeoutMs: 120_000,
     });
   }
 
@@ -147,11 +168,12 @@ export class AssistantApi {
     sampleRate: number,
     conversationId?: string,
     context?: ClientContext,
+    mode?: AssistantMode,
   ): Promise<AssistantAnswer> {
     return this.request('/api/voice', {
       method: 'POST',
-      body: JSON.stringify({ audioBase64, sampleRate, conversationId, context }),
-      timeoutMs: 90_000,
+      body: JSON.stringify({ audioBase64, sampleRate, conversationId, context, mode }),
+      timeoutMs: 150_000,
     });
   }
 

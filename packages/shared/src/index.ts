@@ -44,6 +44,27 @@ export interface AccountSummary {
 }
 
 /* ------------------------------------------------------------------ *
+ * Assistant modes
+ * ------------------------------------------------------------------ */
+
+/**
+ * `fast` answers from the user's own data only — calendar, mail, bookings,
+ * location. `deep` additionally gives Claude the server-side web search and
+ * web fetch tools, so it can read the open internet before answering.
+ */
+export type AssistantMode = 'fast' | 'deep';
+
+export const ASSISTANT_MODES: readonly AssistantMode[] = ['fast', 'deep'];
+
+/** A page the answer was actually built from, surfaced so claims are checkable. */
+export interface SourceRef {
+  title: string;
+  url: string;
+  /** Hostname alone — the HUD has no room for a full URL. */
+  host: string;
+}
+
+/* ------------------------------------------------------------------ *
  * Bookings
  * ------------------------------------------------------------------ */
 
@@ -151,6 +172,8 @@ export interface AskRequest {
   /** Conversation id; omit to start a new thread. */
   conversationId?: string;
   context?: ClientContext;
+  /** Overrides the account's saved mode for this one question. */
+  mode?: AssistantMode;
 }
 
 export interface VoiceAskRequest {
@@ -159,6 +182,7 @@ export interface VoiceAskRequest {
   sampleRate?: number;
   conversationId?: string;
   context?: ClientContext;
+  mode?: AssistantMode;
 }
 
 /** One tool round-trip, surfaced so the glasses can show "Checking calendar…". */
@@ -178,15 +202,44 @@ export interface AssistantAnswer {
   steps: AssistantStep[];
   /** Structured rows worth rendering as a list instead of prose. */
   items?: AgendaItem[];
+  /** Pages consulted on the web, when the question ran in `deep` mode. */
+  sources?: SourceRef[];
   /** Model + usage, for debugging in the phone-side panel. */
   meta: {
     model: string;
+    mode: AssistantMode;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
+    webSearches: number;
+    webFetches: number;
     latencyMs: number;
     truncated: boolean;
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Account settings
+ * ------------------------------------------------------------------ */
+
+export interface AccountState {
+  account: AccountSummary;
+  lastGmailSyncAt?: string;
+  bookings: number;
+  voiceEnabled: boolean;
+  /** The account's default mode for new questions. */
+  mode: AssistantMode;
+  /** Whether this account has its own Anthropic key on file. */
+  hasOwnApiKey: boolean;
+  /** Last four characters of that key, for recognising which one is stored. */
+  apiKeyHint?: string;
+  /** False when neither a personal nor a server key is available. */
+  assistantReady: boolean;
+}
+
+export interface SetApiKeyRequest {
+  /** An `sk-ant-…` key. Validated against the Anthropic API before it is stored. */
+  apiKey: string;
 }
 
 /* ------------------------------------------------------------------ *

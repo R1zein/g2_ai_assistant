@@ -12,6 +12,7 @@
                                         ┌────────────────────────────────────┐
                                         │  apps/server                       │
                                         │   ├─ Claude agent (tool use)       │
+                                        │   ├─ per-account API keys (sealed) │
                                         │   ├─ Gmail → booking extraction    │
                                         │   ├─ Google Calendar mirror        │
                                         │   ├─ reminder scheduler            │
@@ -19,7 +20,8 @@
                                         └───────┬──────────────┬─────────────┘
                                                 │              │
                                        Anthropic API    Google APIs
-                                                       (Gmail, Calendar)
+                                       (+ server-side  (Gmail, Calendar)
+                                        web search)
 ```
 
 ## Why there is a server at all
@@ -78,6 +80,72 @@ to echo back onto the HUD.
 Tools are registered in `apps/server/src/ai/tools/` in a fixed order, because
 tool definitions render first in the request and a stable array keeps the
 prompt-cache prefix intact.
+
+## Two modes
+
+| | `fast` | `deep` |
+|---|---|---|
+| Tools | calendar, mail, bookings, location, weather, geocode, clock, reminders | the same, plus `web_search` and `web_fetch` |
+| Effort | `medium` | `high` |
+| Iteration cap | 8 | 12 |
+| Budget | 45 s | 90 s |
+
+Both modes answer general questions — a translation, a conversion, how something
+works — straight from the model's own knowledge, with no tool call. That is the
+fast path and most general questions belong on it. `deep` adds the open web for
+anything that changes: a price, a timetable, a score, a flight status.
+
+The web tools are Anthropic-hosted, so there is no scraping stack here. Two
+things follow from that. `web_fetch` only reads URLs already present in the
+conversation, so a search has to surface the URL first (or the user has to say
+it). And a long web turn can come back with `stop_reason: "pause_turn"`, which
+the loop resumes by echoing the assistant turn back unchanged — dropping that
+would silently truncate the answer.
+
+Each mode has its own frozen prompt prefix (`ASSISTANT_SYSTEM` plus either
+`WEB_ADDENDUM` or `NO_WEB_ADDENDUM`) carrying the cache breakpoint, with the
+volatile context block after it. The tool set already differs per mode, so
+per-mode caches are the natural shape rather than a compromise.
+
+The mode is stored per account, toggled from the glasses contextual menu or the
+phone panel, and overridable per request via `AskRequest.mode`.
+
+## Whose key pays
+
+Each account stores its own Anthropic key, sealed with AES-256-GCM under a
+scrypt-derived master key from `ENCRYPTION_KEY` (`apps/server/src/util/crypto.ts`).
+Only the ciphertext and the last four characters reach the database; the
+plaintext is never logged and never returned over the API.
+
+`anthropicFor(store, user)` resolves the client per request — personal key first,
+the shared `ANTHROPIC_API_KEY` second, and a `MissingApiKeyError` (surfaced as
+HTTP 402) when there is neither. A key that is on file but will not decrypt is an
+error rather than a silent fallback: quietly billing the wrong account is worse
+than failing.
+
+Keys are validated against `models.list` before being stored, so a typo fails at
+paste time rather than on the wearer's next question.
+
+## Which model runs extraction
+
+Extraction is one call per candidate email, which makes it the dominant cost at
+any real mailbox size, and it is also the part where a wrong answer is invisible
+— a mis-parsed date lands in the calendar as a wrong event.
+
+It runs on `claude-haiku-4-5` by default. The reason is not only price: the
+Anthropic API constrains generation to the zod schema (`output_config.format` +
+`messages.parse`), so an 18-field record either arrives complete and well-typed or
+not at all. An OpenAI-compatible JSON mode guarantees valid JSON, not a valid
+schema, and would need its own validate-and-retry layer.
+
+Per email, roughly 3k input tokens (the system prompt is cached) and 300 output:
+
+| | per email | 1000 emails |
+|---|---|---|
+| `claude-opus-5` | $0.0225 | $22.50 |
+| `claude-haiku-4-5` | $0.0045 | $4.50 |
+
+Set `EXTRACTION_MODEL` to change it.
 
 ### Email → calendar
 

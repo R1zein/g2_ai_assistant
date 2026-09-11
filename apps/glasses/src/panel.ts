@@ -90,11 +90,37 @@ function renderContent(state: PanelState, app: AssistantApp): Node[] {
   });
   askCard.append(input);
 
+  // Mode switch, mirroring the glasses contextual menu.
+  const modeRow = el('div', 'row');
+  const modeLabel = el('span', 'muted small', state.mode === 'deep' ? 'Web search on' : 'Local data only');
+  const modeBtn = el('button', 'btn small-btn', state.mode === 'deep' ? 'Turn web off' : 'Turn web on');
+  modeBtn.addEventListener('click', () => {
+    void app.panelAction('mode', state.mode === 'deep' ? 'fast' : 'deep');
+  });
+  modeRow.append(modeLabel, modeBtn);
+  askCard.append(modeRow);
+
   if (state.lastAnswer) {
     askCard.append(
       el('p', 'muted small', state.lastQuestion ?? ''),
       el('p', 'answer', state.lastAnswer),
     );
+
+    // The HUD can only show hostnames; here they are tappable.
+    if (state.lastSources && state.lastSources.length > 0) {
+      const list = el('ul', 'sources');
+      for (const source of state.lastSources) {
+        const row = el('li');
+        const link = el('a');
+        link.textContent = source.title || source.host;
+        link.setAttribute('href', source.url);
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noreferrer');
+        row.append(link, el('span', 'muted small', source.host));
+        list.append(row);
+      }
+      askCard.append(el('p', 'label', 'Sources'), list);
+    }
   }
   nodes.push(askCard);
 
@@ -117,6 +143,51 @@ function renderContent(state: PanelState, app: AssistantApp): Node[] {
     agendaCard.append(list);
   }
   nodes.push(agendaCard);
+
+  // Anthropic key. The panel is already authenticated, so the key never needs a
+  // separate browser sign-in flow.
+  const keyCard = el('div', 'card');
+  keyCard.append(el('h2', undefined, 'Claude API key'));
+
+  if (state.hasOwnApiKey) {
+    keyCard.append(
+      el('p', 'muted', `Using your own key (ends ...${state.apiKeyHint ?? ''}). Usage bills to your Anthropic account.`),
+    );
+    const remove = el('button', 'btn', 'Remove key');
+    remove.addEventListener('click', () => {
+      if (confirm('Remove your Anthropic key? The assistant will fall back to the server key, if there is one.')) {
+        void app.panelAction('clear-key');
+      }
+    });
+    keyCard.append(remove);
+  } else {
+    keyCard.append(
+      el(
+        'p',
+        'muted',
+        state.assistantReady
+          ? 'Currently using the server key. Add your own to bill usage to your Anthropic account.'
+          : 'The assistant needs a key before it can answer. Paste one from console.anthropic.com.',
+      ),
+    );
+
+    const keyInput = el('input', 'input');
+    keyInput.id = 'api-key-input';
+    keyInput.setAttribute('type', 'password');
+    keyInput.setAttribute('autocomplete', 'off');
+    keyInput.setAttribute('placeholder', 'sk-ant-...');
+
+    const save = el('button', 'btn primary', 'Save key');
+    save.addEventListener('click', () => {
+      const value = keyInput.value.trim();
+      if (!value) return;
+      keyInput.value = '';
+      void app.panelAction('set-key', value);
+    });
+
+    keyCard.append(keyInput, save);
+  }
+  nodes.push(keyCard);
 
   const dangerCard = el('div', 'card');
   const unpair = el('button', 'btn danger', 'Unpair this device');

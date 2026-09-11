@@ -1,4 +1,4 @@
-import type { AssistantNotification, Booking } from '@g2/shared';
+import type { AssistantMode, AssistantNotification, Booking } from '@g2/shared';
 
 export interface GoogleTokens {
   accessToken?: string;
@@ -22,6 +22,16 @@ export interface UserRecord {
   lastGmailSyncAt?: string;
   /** Preferred answer language as a BCP-47 tag; empty means "match the question". */
   language?: string;
+  /** Default mode for new questions from this account. */
+  mode?: AssistantMode;
+  /**
+   * The account's own Anthropic key, sealed with `util/crypto`. Never stored or
+   * logged in plaintext, and never returned over the API.
+   */
+  apiKeyCipher?: string;
+  /** Last four characters, so the owner can tell which key is on file. */
+  apiKeyHint?: string;
+  apiKeySetAt?: string;
   createdAt: string;
   updatedAt: string;
 }

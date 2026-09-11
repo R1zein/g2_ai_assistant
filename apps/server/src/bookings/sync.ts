@@ -5,6 +5,7 @@ import { clientForUser } from '../google/oauth.js';
 import { bookingSearchQuery, getMessage, searchMessageIds } from '../google/gmail.js';
 import { ensureBookingsCalendar, getPrimaryTimeZone, upsertBookingEvent } from '../google/calendar.js';
 import type { BookingRecord, Store, UserRecord } from '../store/index.js';
+import { anthropicFor } from '../ai/anthropic.js';
 import { hub } from '../notifications/hub.js';
 import { scheduleBookingReminders } from '../notifications/scheduler.js';
 import { nowIso, relativeTime } from '../util/time.js';
@@ -69,6 +70,18 @@ export async function syncMailbox(
 
   const auth = clientForUser(store, user);
 
+  // Resolved once for the whole pass — every extraction bills to this account.
+  let anthropic;
+  try {
+    anthropic = anthropicFor(store, user).client;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`skipping sync for ${user.email}: ${message}`);
+    result.errors.push(message);
+    result.finishedAt = nowIso();
+    return result;
+  }
+
   let timeZone = user.timeZone;
   if (!timeZone) {
     timeZone = await getPrimaryTimeZone(auth);
@@ -123,7 +136,7 @@ export async function syncMailbox(
 
       result.scannedMessages++;
 
-      const extraction = await extractBooking(message, timeZone);
+      const extraction = await extractBooking(anthropic, message, timeZone);
       store.markMessageSeen(user.id, messageId);
       if (!extraction) return;
 

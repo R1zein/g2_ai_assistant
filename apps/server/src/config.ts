@@ -52,7 +52,13 @@ export interface Config {
   dataDir: string;
   logLevel: string;
 
+  /**
+   * Shared fallback key. Optional: each account normally brings its own, which
+   * is stored encrypted and billed to them.
+   */
   anthropicApiKey: string;
+  /** When true, an account with no personal key cannot use the assistant. */
+  requireUserApiKey: boolean;
   /**
    * Assistant model. Defaults to Claude Opus 5 — the assistant reasons over
    * calendar/mail tool results, which is exactly where the extra capability pays.
@@ -66,6 +72,8 @@ export interface Config {
    * of `high`; raise it if you care more about depth than about response time.
    */
   assistantEffort: Effort;
+  /** `deep` mode adds the web tools and is allowed to think harder. */
+  deepEffort: Effort;
   extractionEffort: Effort;
   /** Opt into the server-side refusal fallback so a declined turn still answers. */
   refusalFallback: boolean;
@@ -73,6 +81,13 @@ export interface Config {
   maxAgentIterations: number;
   /** Wall-clock budget for one question, in ms. */
   agentTimeoutMs: number;
+  /** Same two limits, raised for `deep` mode where a web round-trip is slower. */
+  deepMaxAgentIterations: number;
+  deepAgentTimeoutMs: number;
+  /** Cap on server-side web search / fetch calls within one question. */
+  webMaxUses: number;
+  /** Domains the web tools may never touch. Empty means no block list. */
+  webBlockedDomains: string[];
 
   googleClientId: string;
   googleClientSecret: string;
@@ -116,14 +131,25 @@ export function loadConfig(): Config {
     dataDir: opt('DATA_DIR', 'data'),
     logLevel: opt('LOG_LEVEL', 'info'),
 
-    anthropicApiKey: req('ANTHROPIC_API_KEY'),
+    anthropicApiKey: opt('ANTHROPIC_API_KEY'),
+    requireUserApiKey: bool('REQUIRE_USER_API_KEY', false),
     assistantModel: opt('ASSISTANT_MODEL', 'claude-opus-5'),
-    extractionModel: opt('EXTRACTION_MODEL', 'claude-opus-5'),
+    // Extraction is a narrow, well-specified task run once per candidate email,
+    // so it runs on the small model by default.
+    extractionModel: opt('EXTRACTION_MODEL', 'claude-haiku-4-5'),
     assistantEffort: effort('ASSISTANT_EFFORT', 'medium'),
+    deepEffort: effort('DEEP_EFFORT', 'high'),
     extractionEffort: effort('EXTRACTION_EFFORT', 'low'),
     refusalFallback: bool('REFUSAL_FALLBACK', true),
     maxAgentIterations: num('MAX_AGENT_ITERATIONS', 8),
     agentTimeoutMs: num('AGENT_TIMEOUT_MS', 45_000),
+    deepMaxAgentIterations: num('DEEP_MAX_AGENT_ITERATIONS', 12),
+    deepAgentTimeoutMs: num('DEEP_AGENT_TIMEOUT_MS', 90_000),
+    webMaxUses: num('WEB_MAX_USES', 6),
+    webBlockedDomains: opt('WEB_BLOCKED_DOMAINS')
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean),
 
     googleClientId: req('GOOGLE_CLIENT_ID'),
     googleClientSecret: req('GOOGLE_CLIENT_SECRET'),

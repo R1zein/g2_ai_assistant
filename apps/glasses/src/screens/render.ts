@@ -1,4 +1,4 @@
-import type { AgendaItem } from '@g2/shared';
+import type { AgendaItem, AssistantMode, SourceRef } from '@g2/shared';
 import { BRIGHTNESS, DISPLAY, LAYOUT } from '../config';
 import type { PageSpec, TextSpec } from '../display/renderer';
 import { centre, fit, spread } from '../display/text';
@@ -11,18 +11,27 @@ export const BODY_WIDTH = DISPLAY.width - 2 * LAYOUT.padding;
 /** Whole lines that fit in the body container. */
 export const BODY_LINES = Math.floor(LAYOUT.body.height / DISPLAY.lineHeight);
 
-const MENU_ITEMS = [
-  { itemID: MENU.ask, itemName: 'Ask' },
-  { itemID: MENU.agenda, itemName: 'Agenda' },
-  { itemID: MENU.brief, itemName: 'Brief me' },
-  { itemID: MENU.syncMail, itemName: 'Scan mail' },
-  { itemID: MENU.account, itemName: 'Account' },
-  { itemID: MENU.exit, itemName: 'Exit' },
-];
+/**
+ * The OS contextual menu. The mode entry shows what a tap would switch *to*,
+ * which is why the list is built per render rather than being a constant.
+ */
+function menuItems(mode: AssistantMode) {
+  return [
+    { itemID: MENU.ask, itemName: 'Ask' },
+    { itemID: MENU.agenda, itemName: 'Agenda' },
+    { itemID: MENU.brief, itemName: 'Brief me' },
+    { itemID: MENU.toggleMode, itemName: mode === 'deep' ? 'Web: on' : 'Web: off' },
+    { itemID: MENU.syncMail, itemName: 'Scan mail' },
+    { itemID: MENU.account, itemName: 'Account' },
+    { itemID: MENU.exit, itemName: 'Exit' },
+  ];
+}
 
 function header(left: string, chrome: Chrome): TextSpec {
   const right = [
     chrome.busy ? '...' : '',
+    // Only flagged when on: `fast` is the normal state and needs no badge.
+    chrome.mode === 'deep' ? 'web' : '',
     chrome.connected ? '' : 'offline',
     typeof chrome.battery === 'number' ? `${chrome.battery}%` : '',
   ]
@@ -76,8 +85,18 @@ function footer(content: string): TextSpec {
 function page(top: string, middle: string, bottom: string, chrome: Chrome): PageSpec {
   return {
     containers: [header(top, chrome), body(middle), footer(bottom)],
-    menu: MENU_ITEMS,
+    menu: menuItems(chrome.mode),
   };
+}
+
+/**
+ * Sources get their own trailing page.
+ *
+ * Hostnames only — a full URL wraps across three lines and cannot be tapped
+ * anyway. The phone panel carries the real links.
+ */
+export function sourcesPage(sources: SourceRef[]): string {
+  return ['Sources:', ...sources.map((s) => fit(`- ${s.host}  ${s.title}`, BODY_WIDTH))].join('\n');
 }
 
 /** "15:40" in the wearer's own zone — the display has no room for more. */
@@ -215,13 +234,19 @@ export function buildPage({ view, chrome, timeZone, voiceEnabled }: RenderInput)
       return page('Thinking', centre(view.step, BODY_WIDTH), 'Working...', chrome);
 
     case 'answer': {
-      const totalPages = Math.max(1, view.pages.length);
+      // Sources, when there are any, ride along as one extra page.
+      const pages =
+        view.sources && view.sources.length > 0
+          ? [...view.pages, sourcesPage(view.sources)]
+          : view.pages;
+
+      const totalPages = Math.max(1, pages.length);
       const current = Math.min(view.page, totalPages - 1);
       const indicator = totalPages > 1 ? `  ${current + 1}/${totalPages}` : '';
 
       return page(
         fit(view.question, BODY_WIDTH - 60),
-        view.pages[current] ?? '',
+        pages[current] ?? '',
         `${totalPages > 1 ? 'Swipe to read' : askHint}${indicator}`,
         chrome,
       );

@@ -1,14 +1,18 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type {
+  AccountState,
   AgendaResponse,
   AskRequest,
   AssistantAnswer,
+  AssistantMode,
   PairPollResponse,
   PairStartRequest,
   PairStartResponse,
+  SetApiKeyRequest,
   StreamEvent,
   VoiceAskRequest,
 } from '@g2/shared';
+import { ASSISTANT_MODES } from '@g2/shared';
 import { loadConfig } from '../config.js';
 import { logger } from '../logger.js';
 import { ask } from '../ai/agent.js';
@@ -18,6 +22,8 @@ import { syncMailbox } from '../bookings/sync.js';
 import { hub } from '../notifications/hub.js';
 import { deliverDue } from '../notifications/scheduler.js';
 import { speechEnabled, SpeechUnavailableError, transcribe } from '../speech/index.js';
+import { assistantReady, MissingApiKeyError, validateApiKey } from '../ai/anthropic.js';
+import { encryptionAvailable } from '../util/crypto.js';
 import type { DeviceRecord, Store, UserRecord } from '../store/index.js';
 import { relativeTime } from '../util/time.js';
 import { toAgendaItem } from '../ai/tools/index.js';
@@ -127,7 +133,7 @@ export function registerApiRoutes(app: FastifyInstance, store: Store): void {
     const session = authenticate(store, request, reply);
     if (!session) return;
 
-    return {
+    const state: AccountState = {
       account: {
         email: session.user.email,
         name: session.user.name,
@@ -138,7 +144,69 @@ export function registerApiRoutes(app: FastifyInstance, store: Store): void {
       lastGmailSyncAt: session.user.lastGmailSyncAt,
       bookings: store.listBookings(session.user.id).length,
       voiceEnabled: speechEnabled(),
+      mode: session.user.mode ?? 'fast',
+      hasOwnApiKey: Boolean(session.user.apiKeyCipher),
+      apiKeyHint: session.user.apiKeyHint,
+      assistantReady: assistantReady(store, session.user),
     };
+    return state;
+  });
+
+  /* ---------------- mode ---------------- */
+
+  app.post<{ Body: { mode: AssistantMode } }>('/api/mode', async (request, reply) => {
+    const session = authenticate(store, request, reply);
+    if (!session) return;
+
+    const mode = request.body?.mode;
+    if (!mode || !ASSISTANT_MODES.includes(mode)) {
+      return reply
+        .code(400)
+        .send({ error: 'bad_request', message: `mode must be one of: ${ASSISTANT_MODES.join(', ')}.` });
+    }
+
+    store.setMode(session.user.id, mode);
+    return { mode };
+  });
+
+  /* ---------------- Anthropic key ---------------- */
+
+  app.post<{ Body: SetApiKeyRequest }>('/api/account/api-key', async (request, reply) => {
+    const session = authenticate(store, request, reply);
+    if (!session) return;
+
+    if (!encryptionAvailable()) {
+      return reply.code(503).send({
+        error: 'encryption_unavailable',
+        message:
+          'This server cannot store keys because ENCRYPTION_KEY is not configured. ' +
+          'Ask the operator to set one.',
+      });
+    }
+
+    const apiKey = (request.body?.apiKey ?? '').trim();
+    if (!apiKey) {
+      return reply.code(400).send({ error: 'bad_request', message: 'apiKey is required.' });
+    }
+
+    // Validate before storing, so a typo fails here rather than on the wearer's
+    // next question.
+    const check = await validateApiKey(apiKey);
+    if (!check.ok) {
+      return reply.code(400).send({ error: 'invalid_api_key', message: check.reason });
+    }
+
+    const updated = store.setUserApiKey(session.user.id, apiKey);
+    log.info(`stored a personal Anthropic key for ${session.user.email}`);
+    return { hasOwnApiKey: true, apiKeyHint: updated?.apiKeyHint };
+  });
+
+  app.delete('/api/account/api-key', async (request, reply) => {
+    const session = authenticate(store, request, reply);
+    if (!session) return;
+
+    store.clearUserApiKey(session.user.id);
+    return { hasOwnApiKey: false };
   });
 
   app.delete('/api/session', async (request, reply) => {
@@ -226,9 +294,13 @@ export function registerApiRoutes(app: FastifyInstance, store: Store): void {
         question: text,
         conversationId: request.body.conversationId,
         context: request.body.context,
+        mode: request.body.mode,
       });
       return answer;
     } catch (err) {
+      if (err instanceof MissingApiKeyError) {
+        return reply.code(402).send({ error: 'no_api_key', message: err.message });
+      }
       log.error('ask failed', err);
       return reply.code(502).send({
         error: 'assistant_failed',
@@ -272,8 +344,12 @@ export function registerApiRoutes(app: FastifyInstance, store: Store): void {
         question: transcript,
         conversationId: request.body.conversationId,
         context: request.body.context,
+        mode: request.body.mode,
       });
     } catch (err) {
+      if (err instanceof MissingApiKeyError) {
+        return reply.code(402).send({ error: 'no_api_key', message: err.message });
+      }
       log.error('voice ask failed', err);
       return reply.code(502).send({
         error: 'assistant_failed',

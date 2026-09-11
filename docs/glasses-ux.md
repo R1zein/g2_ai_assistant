@@ -10,7 +10,7 @@ reports the same event set for both, distinguished only by `eventSource`.
 | **Single press** | `sysEvent` type 0 *(arrives as `undefined` — protobuf drops zero values)* | Context dependent: dismiss a notification, leave an answer, page the agenda. |
 | **Double press** | `sysEvent` type 3 | `shutDownPageContainer(1)` — the OS exit dialog. Cleanup happens on the exit event, not here, so cancelling leaves the app usable. |
 | **Swipe up / down** | `textEvent` type 1 / 2 | Previous / next page of a long answer or agenda. |
-| **Contextual menu** | `menuItemClickEvent` | Ask · Agenda · Brief me · Scan mail · Account · Exit |
+| **Contextual menu** | `menuItemClickEvent` | Ask · Agenda · Brief me · Web on/off · Scan mail · Account · Exit |
 
 Note that taps on a text container arrive as `sysEvent`, not `textEvent` — only
 scroll gestures fire `textEvent`. This is the single most common source of
@@ -50,6 +50,24 @@ A HUD is read while walking. The server also shapes the result afterwards —
 markdown stripped, emoji removed (the firmware font has no coverage and silently
 drops them), smart quotes flattened, hard cap at 700 characters.
 
+## Two modes
+
+The **Web on/off** menu entry switches between them, and the header carries a
+`web` badge while the web is in play. The setting is per account and survives a
+restart.
+
+**Off (`fast`)** — your calendar, mail, bookings and location, plus whatever the
+model already knows. Answers in a couple of seconds. When a question genuinely
+needs live data, it answers with what is solid and adds a short "turn on web in
+the menu and ask again".
+
+**On (`deep`)** — the same, plus Anthropic's server-side web search and page
+fetch. Slower and more expensive per question, but it can answer anything.
+
+Answers that used the web get one extra page listing the hostnames consulted.
+Full URLs stay on the phone panel, where they are tappable — a URL on a HUD wraps
+across three lines and cannot be followed anyway.
+
 ## What the wearer can ask
 
 The assistant reaches the calendar, the mailbox, the extracted reservations, the
@@ -64,6 +82,12 @@ phone's position, the weather, a geocoder and the clock, and it chains them:
 - *"Do I need a jacket where I'm going?"* — destination coordinates plus weather
 - *"Remind me to check in for the flight at 18:00"*
 - *"Book dinner in the calendar for Friday at 20:00"*
+
+Ordinary questions work too, and do not touch your data at all — *"how do I say
+'the bill, please' in Czech"*, *"how many grams in eight ounces"*, *"what does
+this error mean"*. Those are answered straight from the model's own knowledge in
+either mode. Anything that changes — a score, a price, a timetable, a flight
+status — needs web mode on.
 
 ## Failure behaviour
 

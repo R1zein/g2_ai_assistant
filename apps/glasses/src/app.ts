@@ -5,7 +5,14 @@ import {
   type DeviceStatus,
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
-import type { AgendaItem, AssistantAnswer, AssistantNotification, ClientContext } from '@g2/shared';
+import type {
+  AccountState,
+  AgendaItem,
+  AssistantAnswer,
+  AssistantMode,
+  AssistantNotification,
+  ClientContext,
+} from '@g2/shared';
 import { api, ApiRequestError } from './api';
 import { GlassesBridge } from './bridge';
 import { Renderer } from './display/renderer';
@@ -24,8 +31,13 @@ export interface PanelState {
   view: View['kind'];
   lastQuestion?: string;
   lastAnswer?: string;
+  lastSources?: { title: string; url: string; host: string }[];
   agenda: AgendaItem[];
   voiceEnabled: boolean;
+  mode: AssistantMode;
+  hasOwnApiKey: boolean;
+  apiKeyHint?: string;
+  assistantReady: boolean;
   pairing?: { code: string; url: string };
   log: string[];
 }
@@ -44,11 +56,16 @@ export class AssistantApp {
   private voice!: VoiceRecorder;
 
   private view: View = { kind: 'boot', message: 'Connecting…' };
-  private chrome: Chrome = { connected: false };
+  private chrome: Chrome = { connected: false, mode: 'fast' };
   private timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   private voiceEnabled = false;
 
   private agenda: AgendaItem[] = [];
+  private mode: AssistantMode = 'fast';
+  private apiKeyState: { hasOwnApiKey: boolean; apiKeyHint?: string; ready: boolean } = {
+    hasOwnApiKey: false,
+    ready: true,
+  };
   private conversationId: string | undefined;
   private lastAnswer: AssistantAnswer | undefined;
   /** The view to return to once a notification or answer is dismissed. */
@@ -131,8 +148,13 @@ export class AssistantApp {
       const me = await api.me();
       this.timeZone = me.account.timeZone || this.timeZone;
       this.voiceEnabled = me.voiceEnabled;
+      this.applyAccountState(me);
       await this.storage.set(STORAGE_KEYS.accountEmail, me.account.email);
-      this.log(`signed in as ${me.account.email}`);
+      this.log(`signed in as ${me.account.email} (${me.mode} mode)`);
+
+      if (!me.assistantReady) {
+        this.log('no Anthropic key on file — add one in the phone panel');
+      }
 
       this.openStream();
       this.startLocationUpdates();
@@ -154,6 +176,16 @@ export class AssistantApp {
         body: `${err instanceof Error ? err.message : 'Unknown error'}\n\nCheck that the assistant server is running and reachable from the phone.`,
       });
     }
+  }
+
+  private applyAccountState(me: AccountState): void {
+    this.mode = me.mode;
+    this.chrome = { ...this.chrome, mode: me.mode };
+    this.apiKeyState = {
+      hasOwnApiKey: me.hasOwnApiKey,
+      apiKeyHint: me.apiKeyHint,
+      ready: me.assistantReady,
+    };
   }
 
   private async beginPairing(): Promise<void> {
@@ -409,8 +441,10 @@ export class AssistantApp {
     this.conversationId = answer.conversationId;
     this.lastAnswer = answer;
     this.log(
-      `"${answer.question}" -> ${answer.meta.latencyMs}ms, ` +
-        `${answer.steps.length} tool call(s), ${answer.meta.model}`,
+      `"${answer.question}" -> ${answer.meta.latencyMs}ms, ${answer.meta.mode} mode, ` +
+        `${answer.steps.length} tool call(s)` +
+        (answer.meta.webSearches > 0 ? `, ${answer.meta.webSearches} web search(es)` : '') +
+        `, ${answer.meta.model}`,
     );
 
     await this.show({
@@ -418,6 +452,7 @@ export class AssistantApp {
       question: answer.question,
       pages: paginate(answer.answer, BODY_WIDTH, BODY_LINES),
       page: 0,
+      sources: answer.sources,
     });
   }
 
@@ -552,6 +587,9 @@ export class AssistantApp {
           'Give me a brief for the next 24 hours: what is coming up, anything I need to leave early for, and anything unusual.',
         );
         return;
+      case MENU.toggleMode:
+        await this.setMode(this.mode === 'deep' ? 'fast' : 'deep');
+        return;
       case MENU.syncMail:
         await this.runMailSync();
         return;
@@ -563,6 +601,32 @@ export class AssistantApp {
         return;
       default:
         return;
+    }
+  }
+
+  /**
+   * Switches between local-only and web-enabled answering.
+   *
+   * The choice is stored server-side so it survives a restart and matches what
+   * the phone panel shows.
+   */
+  private async setMode(mode: AssistantMode): Promise<void> {
+    try {
+      await api.setMode(mode);
+      this.mode = mode;
+      this.chrome = { ...this.chrome, mode };
+      this.log(`switched to ${mode} mode`);
+
+      await this.show({
+        kind: 'message',
+        title: mode === 'deep' ? 'Web search on' : 'Web search off',
+        body:
+          mode === 'deep'
+            ? 'I can now read the open web to answer. Slower, and it costs more per question.'
+            : 'Back to your calendar, mail and bookings only. Faster and cheaper.',
+      });
+    } catch (err) {
+      await this.presentError(err);
     }
   }
 
@@ -595,6 +659,7 @@ export class AssistantApp {
   private async showAccount(): Promise<void> {
     try {
       const me = await api.me();
+      this.applyAccountState(me);
       await this.show({
         kind: 'message',
         title: 'Account',
@@ -603,7 +668,13 @@ export class AssistantApp {
           `Timezone ${me.account.timeZone}`,
           `${me.bookings} saved booking(s)`,
           me.lastGmailSyncAt ? `Mail scanned ${new Date(me.lastGmailSyncAt).toLocaleString()}` : 'Mail not scanned yet',
+          `Mode: ${me.mode === 'deep' ? 'web search on' : 'local only'}`,
           me.voiceEnabled ? 'Voice input on' : 'Voice input off',
+          me.hasOwnApiKey
+            ? `Your own API key (...${me.apiKeyHint ?? ''})`
+            : me.assistantReady
+              ? 'Using the server API key'
+              : 'No API key - add one in the phone panel',
         ].join('\n'),
       });
     } catch (err) {
@@ -649,8 +720,38 @@ export class AssistantApp {
   }
 
   /** Lets the phone-side panel drive the same actions as the glasses menu. */
-  async panelAction(action: 'ask' | 'agenda' | 'sync' | 'unpair', payload?: string): Promise<void> {
+  async panelAction(
+    action: 'ask' | 'agenda' | 'sync' | 'unpair' | 'mode' | 'set-key' | 'clear-key',
+    payload?: string,
+  ): Promise<void> {
     switch (action) {
+      case 'mode':
+        await this.setMode(payload === 'deep' ? 'deep' : 'fast');
+        return;
+      case 'set-key': {
+        if (!payload) return;
+        try {
+          const result = await api.setApiKey(payload);
+          this.apiKeyState = { hasOwnApiKey: true, apiKeyHint: result.apiKeyHint, ready: true };
+          this.log(`stored your Anthropic key (...${result.apiKeyHint ?? ''})`);
+          this.emitPanel();
+        } catch (err) {
+          this.log(`key rejected: ${err instanceof Error ? err.message : 'error'}`);
+          this.emitPanel();
+        }
+        return;
+      }
+      case 'clear-key':
+        try {
+          await api.clearApiKey();
+          const me = await api.me();
+          this.applyAccountState(me);
+          this.log('removed your Anthropic key');
+          this.emitPanel();
+        } catch (err) {
+          this.log(`could not remove the key: ${err instanceof Error ? err.message : 'error'}`);
+        }
+        return;
       case 'ask':
         if (payload) await this.askText(payload);
         else await this.startVoice();
@@ -690,8 +791,13 @@ export class AssistantApp {
       view: this.view.kind,
       lastQuestion: this.lastAnswer?.question,
       lastAnswer: this.lastAnswer?.answer,
+      lastSources: this.lastAnswer?.sources,
       agenda: this.agenda,
       voiceEnabled: this.voiceEnabled,
+      mode: this.mode,
+      hasOwnApiKey: this.apiKeyState.hasOwnApiKey,
+      apiKeyHint: this.apiKeyState.apiKeyHint,
+      assistantReady: this.apiKeyState.ready,
       pairing: this.pairing,
       log: [...this.logLines].reverse(),
     });

@@ -6,12 +6,27 @@ import { Store } from './store/index.js';
 import { registerRoutes } from './routes/index.js';
 import { startScheduler } from './notifications/scheduler.js';
 import { syncAllUsers } from './bookings/sync.js';
+import { encryptionAvailable } from './util/crypto.js';
 
 const log = logger('server');
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   setLogLevel(cfg.logLevel);
+
+  // Neither of these is fatal, but both silently disable a feature, so say so
+  // at boot rather than letting the wearer discover it mid-question.
+  if (!encryptionAvailable()) {
+    log.warn(
+      'ENCRYPTION_KEY is not set — accounts cannot store their own Anthropic key. ' +
+        'Generate one with: openssl rand -base64 32',
+    );
+  }
+  if (!cfg.anthropicApiKey && !cfg.requireUserApiKey) {
+    log.warn(
+      'ANTHROPIC_API_KEY is not set — accounts must each add their own key before the assistant works.',
+    );
+  }
 
   const store = await Store.open(cfg.dataDir);
 
@@ -54,7 +69,10 @@ async function main(): Promise<void> {
 
   await app.listen({ port: cfg.port, host: cfg.host });
   log.info(`listening on ${cfg.host}:${cfg.port} (public base ${cfg.publicBaseUrl})`);
-  log.info(`assistant model: ${cfg.assistantModel} (effort ${cfg.assistantEffort})`);
+  log.info(
+    `assistant: ${cfg.assistantModel} (fast=${cfg.assistantEffort}, deep=${cfg.deepEffort}) | ` +
+      `extraction: ${cfg.extractionModel} (${cfg.extractionEffort})`,
+  );
 
   const shutdown = async (signal: string): Promise<void> => {
     log.info(`${signal} received — shutting down`);
