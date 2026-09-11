@@ -124,6 +124,46 @@ function renderContent(state: PanelState, app: AssistantApp): Node[] {
   }
   nodes.push(askCard);
 
+  // Unsplash's API terms require a visible credit linking to the photographer
+  // and to Unsplash, with UTM parameters. The HUD cannot carry a link, so the
+  // linked half lives here.
+  if (state.photo) {
+    const photoCard = el('div', 'card');
+    photoCard.append(el('h2', undefined, 'Now showing'));
+
+    // Hotlinked straight from the source CDN, which their production checklist
+    // requires. The glasses get a re-rendered 4-bit version because they cannot
+    // take anything else; this is the surface where the rule can be honoured.
+    const thumb = el('img', 'thumb');
+    thumb.setAttribute('src', state.photo.imageUrl);
+    thumb.setAttribute('alt', state.photo.description ?? 'Photo');
+    thumb.setAttribute('loading', 'lazy');
+    photoCard.append(thumb);
+
+    if (state.photo.description) {
+      photoCard.append(el('p', 'muted', state.photo.description));
+    }
+
+    const credit = el('p', 'small');
+    credit.append(document.createTextNode('Photo by '));
+
+    const author = el('a');
+    author.textContent = state.photo.photographer;
+    author.setAttribute('href', state.photo.photographerUrl);
+    author.setAttribute('target', '_blank');
+    author.setAttribute('rel', 'noreferrer');
+
+    const source = el('a');
+    source.textContent = state.photo.source;
+    source.setAttribute('href', state.photo.sourceUrl);
+    source.setAttribute('target', '_blank');
+    source.setAttribute('rel', 'noreferrer');
+
+    credit.append(author, document.createTextNode(' on '), source);
+    photoCard.append(credit, el('p', 'muted small', state.photo.position));
+    nodes.push(photoCard);
+  }
+
   const agendaCard = el('div', 'card');
   agendaCard.append(el('h2', undefined, 'Next up'));
 

@@ -115,6 +115,23 @@ export interface Config {
 
   sessionTtlDays: number;
   pairingTtlMinutes: number;
+
+  /** Unsplash access key. Empty disables the photo feed. */
+  unsplashAccessKey: string;
+  /** Name sent in the required UTM parameters on every link back. */
+  unsplashAppName: string;
+  /** Search term for the feed; empty means whatever Unsplash feels like. */
+  photoQuery: string;
+  /** Rendered frame size. Image containers cap at 288x144. */
+  photoWidth: number;
+  photoHeight: number;
+  /** Photos fetched per API request. Batching is what keeps a demo key usable. */
+  photoBatchSize: number;
+  /**
+   * Pixel encoding. `byte` is one entry per pixel holding 0-15 — the literal
+   * reading of the SDK docs. Flip to `nibble` if hardware shows garbage.
+   */
+  photoPixelFormat: 'byte' | 'nibble';
 }
 
 let cached: Config | null = null;
@@ -173,6 +190,14 @@ export function loadConfig(): Config {
 
     sessionTtlDays: num('SESSION_TTL_DAYS', 365),
     pairingTtlMinutes: num('PAIRING_TTL_MINUTES', 15),
+
+    unsplashAccessKey: opt('UNSPLASH_ACCESS_KEY'),
+    unsplashAppName: opt('UNSPLASH_APP_NAME', 'g2-ai-assistant'),
+    photoQuery: opt('PHOTO_QUERY'),
+    photoWidth: num('PHOTO_WIDTH', 288),
+    photoHeight: num('PHOTO_HEIGHT', 144),
+    photoBatchSize: num('PHOTO_BATCH_SIZE', 24),
+    photoPixelFormat: opt('PHOTO_PIXEL_FORMAT', 'byte') === 'nibble' ? 'nibble' : 'byte',
   };
 
   return cached;

@@ -36,6 +36,11 @@ interface Session {
 }
 
 /** Reads the bearer token and resolves the session, or replies 401. */
+export function makeAuthenticator(store: Store) {
+  return (request: FastifyRequest, reply: FastifyReply): Session | null =>
+    authenticate(store, request, reply);
+}
+
 function authenticate(store: Store, request: FastifyRequest, reply: FastifyReply): Session | null {
   const header = request.headers.authorization ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';

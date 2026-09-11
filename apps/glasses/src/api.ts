@@ -8,6 +8,8 @@ import type {
   ClientContext,
   PairPollResponse,
   PairStartResponse,
+  PhotoFeedResponse,
+  PhotoFrame,
   StreamEvent,
   SyncResult,
 } from '@g2/shared';
@@ -175,6 +177,19 @@ export class AssistantApi {
       body: JSON.stringify({ audioBase64, sampleRate, conversationId, context, mode }),
       timeoutMs: 150_000,
     });
+  }
+
+  /* ---------------- photos ---------------- */
+
+  photoFeed(refresh = false): Promise<PhotoFeedResponse> {
+    return this.request(`/api/photos/feed${refresh ? '?refresh=true' : ''}`, {
+      timeoutMs: 20_000,
+    });
+  }
+
+  photoFrame(id: string): Promise<PhotoFrame> {
+    // The server downloads the original and runs a dither pass before answering.
+    return this.request(`/api/photos/frame/${encodeURIComponent(id)}`, { timeoutMs: 30_000 });
   }
 
   unpair(): Promise<{ ok: boolean }> {

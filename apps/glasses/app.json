@@ -9,8 +9,10 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Talks to the assistant server, which holds the Google and Anthropic credentials.",
-      "whitelist": ["https://assistant.example.com"]
+      "desc": "Talks to the assistant server, which holds the Google and Anthropic credentials, and loads photo thumbnails from their source.",
+      "whitelist": [
+        "https://images.unsplash.com"
+      ]
     },
     {
       "name": "location",
@@ -21,5 +23,11 @@
       "desc": "Hold the touchpad to ask a question out loud."
     }
   ],
-  "supported_languages": ["en", "de", "fr", "es", "it"]
+  "supported_languages": [
+    "en",
+    "de",
+    "fr",
+    "es",
+    "it"
+  ]
 }

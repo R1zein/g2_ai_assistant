@@ -292,3 +292,56 @@ export interface ApiError {
   /** Set when the session token is dead and the app must re-pair. */
   reauth?: boolean;
 }
+
+/* ------------------------------------------------------------------ *
+ * Photo feed
+ * ------------------------------------------------------------------ */
+
+/** One photo in the swipe feed, with everything attribution needs. */
+export interface PhotoCard {
+  id: string;
+  /** Alt text from the source, when it has any. */
+  description?: string;
+  photographer: string;
+  /** Photographer's profile, already carrying the required UTM parameters. */
+  photographerUrl: string;
+  /** The photo's own page, likewise. */
+  photoUrl: string;
+  /**
+   * The original image on the source CDN.
+   *
+   * Unsplash's production checklist requires photos to be hotlinked to this
+   * URL. The glasses cannot — they take raw 4-bit pixels — but the phone panel
+   * loads it directly, which is the only surface where hotlinking is possible.
+   */
+  imageUrl: string;
+  width: number;
+  height: number;
+}
+
+export interface PhotoFeedResponse {
+  photos: PhotoCard[];
+  /** Where these came from, shown once in the phone panel. */
+  attribution: { source: string; sourceUrl: string };
+  /** Requests left in the current window, when the source reports it. */
+  rateRemaining?: number;
+}
+
+/**
+ * How a rendered frame encodes its pixels.
+ *
+ * `byte` is one array entry per pixel holding 0-15, which is the literal
+ * reading of the SDK's "4-bit greyscale, values 0-15 per pixel". `nibble` packs
+ * two pixels per byte, high nibble first. The correct one is a property of the
+ * firmware and has to be confirmed on hardware — see docs/photo-feed.md.
+ */
+export type PixelFormat = 'byte' | 'nibble';
+
+export interface PhotoFrame {
+  id: string;
+  width: number;
+  height: number;
+  format: PixelFormat;
+  /** base64 of the pixel buffer, ready to hand to updateImageRawData. */
+  pixelsBase64: string;
+}

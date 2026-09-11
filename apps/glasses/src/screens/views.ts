@@ -1,4 +1,10 @@
-import type { AgendaItem, AssistantMode, AssistantNotification, SourceRef } from '@g2/shared';
+import type {
+  AgendaItem,
+  AssistantMode,
+  AssistantNotification,
+  PhotoCard,
+  SourceRef,
+} from '@g2/shared';
 
 /** Everything the glasses can be showing. Rendering is a pure function of this. */
 export type View =
@@ -9,7 +15,15 @@ export type View =
   | { kind: 'working'; step: string }
   | { kind: 'answer'; question: string; pages: string[]; page: number; sources?: SourceRef[] }
   | { kind: 'notification'; notification: AssistantNotification }
-  | { kind: 'message'; title: string; body: string };
+  | { kind: 'message'; title: string; body: string }
+  | {
+      kind: 'photos';
+      cards: PhotoCard[];
+      index: number;
+      /** `pushing` covers the half-second to two seconds the pixels take to arrive. */
+      status: 'loading' | 'pushing' | 'ready' | 'error';
+      message?: string;
+    };
 
 export interface Chrome {
   battery?: number;
@@ -25,10 +39,11 @@ export const MENU = {
   ask: 1,
   agenda: 2,
   brief: 3,
-  toggleMode: 4,
-  syncMail: 5,
-  account: 6,
-  exit: 7,
+  photos: 4,
+  toggleMode: 5,
+  syncMail: 6,
+  account: 7,
+  exit: 8,
 } as const;
 
 export type MenuAction = (typeof MENU)[keyof typeof MENU];

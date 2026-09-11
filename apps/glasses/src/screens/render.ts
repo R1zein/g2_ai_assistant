@@ -1,6 +1,6 @@
-import type { AgendaItem, AssistantMode, SourceRef } from '@g2/shared';
+import type { AgendaItem, AssistantMode, PhotoCard, SourceRef } from '@g2/shared';
 import { BRIGHTNESS, DISPLAY, LAYOUT } from '../config';
-import type { PageSpec, TextSpec } from '../display/renderer';
+import type { ImageSpec, PageSpec, TextSpec } from '../display/renderer';
 import { centre, fit, spread } from '../display/text';
 import { MENU, type Chrome, type View } from './views';
 
@@ -20,6 +20,7 @@ function menuItems(mode: AssistantMode) {
     { itemID: MENU.ask, itemName: 'Ask' },
     { itemID: MENU.agenda, itemName: 'Agenda' },
     { itemID: MENU.brief, itemName: 'Brief me' },
+    { itemID: MENU.photos, itemName: 'Photos' },
     { itemID: MENU.toggleMode, itemName: mode === 'deep' ? 'Web: on' : 'Web: off' },
     { itemID: MENU.syncMail, itemName: 'Scan mail' },
     { itemID: MENU.account, itemName: 'Account' },
@@ -97,6 +98,54 @@ function page(top: string, middle: string, bottom: string, chrome: Chrome): Page
  */
 export function sourcesPage(sources: SourceRef[]): string {
   return ['Sources:', ...sources.map((s) => fit(`- ${s.host}  ${s.title}`, BODY_WIDTH))].join('\n');
+}
+
+/* ------------------------------------------------------------------ *
+ * Photo feed
+ * ------------------------------------------------------------------ */
+
+/**
+ * The image container, centred on the display.
+ *
+ * 288x144 is the firmware maximum for a single image container, which is half
+ * the 576x288 canvas. Filling the whole display would mean tiling four
+ * containers and paying four serial BLE pushes per photo.
+ */
+export const PHOTO_BOX = {
+  width: 288,
+  height: 144,
+  x: Math.round((DISPLAY.width - 288) / 2),
+  y: 32,
+} as const;
+
+const PHOTO_CONTAINER = { image: 10, caption: 11 } as const;
+
+export const photoImageSpec: ImageSpec = {
+  id: PHOTO_CONTAINER.image,
+  name: 'photo',
+  x: PHOTO_BOX.x,
+  y: PHOTO_BOX.y,
+  width: PHOTO_BOX.width,
+  height: PHOTO_BOX.height,
+  // z-order is all-or-nothing per page, so every container on this page sets it.
+  zOrder: 3,
+};
+
+/**
+ * Credit line.
+ *
+ * Unsplash's API terms require a visible credit to the photographer and to
+ * Unsplash. The HUD cannot carry a tappable link, so it shows the names and the
+ * phone panel carries the linked attribution with the required UTM parameters.
+ */
+function photoCaption(card: PhotoCard | undefined, status: string): string {
+  if (!card) return status;
+
+  const lines = [];
+  if (card.description) lines.push(fit(card.description, BODY_WIDTH));
+  lines.push(fit(`photo: ${card.photographer} / Unsplash`, BODY_WIDTH));
+  if (status) lines.push(status);
+  return lines.join('\n');
 }
 
 /** "15:40" in the wearer's own zone — the display has no room for more. */
@@ -262,5 +311,53 @@ export function buildPage({ view, chrome, timeZone, voiceEnabled }: RenderInput)
 
     case 'message':
       return page(view.title, view.body, `${askHint}  -  double-tap to exit`, chrome);
+
+    case 'photos': {
+      const card = view.cards[view.index];
+      const counter = view.cards.length > 0 ? `${view.index + 1}/${view.cards.length}` : '';
+
+      const status =
+        view.status === 'loading'
+          ? 'Loading the feed...'
+          : view.status === 'pushing'
+            ? 'Drawing...'
+            : view.status === 'error'
+              ? (view.message ?? 'Could not load the photo.')
+              : 'Swipe to browse';
+
+      return {
+        containers: [
+          // Full-bleed capture layer: image containers never receive events, so
+          // this sits behind the photo and takes every gesture.
+          {
+            id: CONTAINER.body,
+            name: 'photoevt',
+            x: 0,
+            y: 0,
+            width: DISPLAY.width,
+            height: DISPLAY.height,
+            padding: 0,
+            capture: true,
+            content: ' ',
+            zOrder: 1,
+          },
+          { ...header('Photos', chrome), content: spread('Photos', counter, BODY_WIDTH), zOrder: 2 },
+          {
+            id: PHOTO_CONTAINER.caption,
+            name: 'photocap',
+            x: 0,
+            y: PHOTO_BOX.y + PHOTO_BOX.height + 8,
+            width: DISPLAY.width,
+            height: DISPLAY.height - (PHOTO_BOX.y + PHOTO_BOX.height + 8),
+            padding: LAYOUT.padding,
+            brightness: BRIGHTNESS.chrome,
+            content: photoCaption(card, status),
+            zOrder: 4,
+          },
+        ],
+        images: [photoImageSpec],
+        menu: menuItems(chrome.mode),
+      };
+    }
   }
 }

@@ -151,6 +151,14 @@ The icon is not part of `app.json`; it is uploaded in the portal. The G2 wants a
 something larger — at 24 pixels a scaled-down logo turns to mush. Test it against
 the green-on-black rendering, not against your monitor.
 
+### If the photo feed is enabled
+
+Unsplash's own production approval is separate from Even Hub's review and has
+its own checklist. The one item this app cannot meet literally is hotlinking —
+the glasses cannot resolve a URL, so the server re-encodes each photo to 4-bit
+greyscale. `docs/photo-feed.md` explains what is done instead and what to say
+when applying. A Demo key (50 requests an hour) needs no approval at all.
+
 ### Expect questions about this app specifically
 
 It reads the user's mailbox, sends email bodies to a third party, and records

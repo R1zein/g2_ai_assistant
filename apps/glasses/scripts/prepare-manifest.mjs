@@ -94,7 +94,19 @@ if (!network) {
   fail('app.json has no `network` permission, but the app is useless without a server.');
 }
 
-network.whitelist = [origin];
+// The template's whitelist holds the static third-party hosts the app loads
+// directly — photo CDNs and the like. The server origin is prepended here so the
+// two can never disagree, and placeholders from the template are dropped.
+const extras = (network.whitelist ?? []).filter((entry) => {
+  if (typeof entry !== 'string' || entry === origin) return false;
+  try {
+    return !/(^|\.)example\.(com|org|net)$/.test(new URL(entry).hostname);
+  } catch {
+    return false;
+  }
+});
+
+network.whitelist = [origin, ...extras];
 
 writeFileSync(OUTPUT, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
@@ -104,6 +116,7 @@ console.log(`  server     ${origin}`);
 console.log(
   `  perms      ${(manifest.permissions ?? []).map((p) => p.name).join(', ')}`,
 );
+if (extras.length > 0) console.log(`  also       ${extras.join(', ')}`);
 if (isLocal) {
   console.log('\n  Note: the whitelist points at localhost, so this build only works in the simulator.');
 }

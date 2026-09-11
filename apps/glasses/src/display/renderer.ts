@@ -1,5 +1,8 @@
 import {
   CreateStartUpPageContainer,
+  ImageContainerProperty,
+  ImageRawDataUpdate,
+  ImageRawDataUpdateResult,
   MenuContainerProperty,
   MenuItemProperty,
   RebuildPageContainer,
@@ -25,6 +28,27 @@ export interface TextSpec {
   padding?: number;
   /** Exactly one container per page must set this. */
   capture?: boolean;
+  /**
+   * Stacking order, larger in front. All-or-nothing per page: either every
+   * container sets a unique value or none do, or the SDK rejects the payload.
+   */
+  zOrder?: number;
+}
+
+/**
+ * An image container. Firmware limits: 20-288 wide, 20-144 tall, four per page.
+ *
+ * These never capture events, so a page with images still needs a text
+ * container carrying `isEventCapture`.
+ */
+export interface ImageSpec {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zOrder?: number;
 }
 
 export interface MenuSpec {
@@ -34,6 +58,7 @@ export interface MenuSpec {
 
 export interface PageSpec {
   containers: TextSpec[];
+  images?: ImageSpec[];
   menu?: MenuSpec[];
 }
 
@@ -52,6 +77,19 @@ function toContainer(spec: TextSpec): TextContainerProperty {
     isEventCapture: spec.capture ? 1 : 0,
     content: spec.content,
     ...(spec.brightness === undefined ? {} : { textColor: spec.brightness }),
+    ...(spec.zOrder === undefined ? {} : { zOrderIndex: spec.zOrder }),
+  });
+}
+
+function toImageContainer(spec: ImageSpec): ImageContainerProperty {
+  return new ImageContainerProperty({
+    xPosition: spec.x,
+    yPosition: spec.y,
+    width: spec.width,
+    height: spec.height,
+    containerID: spec.id,
+    containerName: spec.name,
+    ...(spec.zOrder === undefined ? {} : { zOrderIndex: spec.zOrder }),
   });
 }
 
@@ -78,9 +116,16 @@ function layoutSignature(page: PageSpec): string {
       c.padding ?? 0,
       c.capture ? 1 : 0,
       c.brightness ?? -1,
+      c.zOrder ?? -1,
     ]),
+    page.images?.map((i) => [i.id, i.name, i.x, i.y, i.width, i.height, i.zOrder ?? -1]) ?? null,
     page.menu?.map((m) => [m.itemID, m.itemName]) ?? null,
   ]);
+}
+
+/** Total containers, which the firmware caps at twelve. */
+function containerCount(page: PageSpec): number {
+  return page.containers.length + (page.images?.length ?? 0);
 }
 
 export class RenderError extends Error {}
@@ -103,16 +148,22 @@ export class Renderer {
     return this.mounted;
   }
 
-  async render(page: PageSpec): Promise<void> {
+  /**
+   * Draws a page.
+   *
+   * Returns whether the page was structurally (re)built, because that clears
+   * every image container — the caller has to push its pixels again.
+   */
+  async render(page: PageSpec): Promise<{ rebuilt: boolean }> {
     if (!this.mounted) {
       await this.mount(page);
-      return;
+      return { rebuilt: true };
     }
 
     const signature = layoutSignature(page);
     if (signature !== this.signature) {
       await this.rebuild(page, signature);
-      return;
+      return { rebuilt: true };
     }
 
     // Same layout: push only the containers whose text actually moved.
@@ -137,17 +188,46 @@ export class Renderer {
         // An in-place update can fail if the firmware dropped the container;
         // a rebuild always re-establishes it.
         await this.rebuild(page, signature);
-        return;
+        return { rebuilt: true };
       }
       this.contents.set(spec.id, spec.content);
+    }
+
+    return { rebuilt: false };
+  }
+
+  /**
+   * Sends pixels to an image container.
+   *
+   * Slow — half a second to two seconds over BLE — and the SDK forbids
+   * overlapping calls, so this goes through the same serialising queue as
+   * everything else and gets a longer timeout.
+   */
+  async pushImage(spec: ImageSpec, pixels: Uint8Array): Promise<void> {
+    const result = await this.bridge.run(
+      'updateImageRawData',
+      (b) =>
+        b.updateImageRawData(
+          new ImageRawDataUpdate({
+            containerID: spec.id,
+            containerName: spec.name,
+            imageData: pixels,
+          }),
+        ),
+      20_000,
+    );
+
+    if (result !== ImageRawDataUpdateResult.success) {
+      throw new RenderError(`updateImageRawData returned ${result}`);
     }
   }
 
   private async mount(page: PageSpec): Promise<void> {
     const menu = toMenu(page.menu);
     const payload = new CreateStartUpPageContainer({
-      containerTotalNum: page.containers.length,
+      containerTotalNum: containerCount(page),
       textObject: page.containers.map(toContainer),
+      ...(page.images?.length ? { imageObject: page.images.map(toImageContainer) } : {}),
       ...(menu ? { menuObject: menu } : {}),
     });
 
@@ -171,8 +251,9 @@ export class Renderer {
   private async rebuild(page: PageSpec, signature: string): Promise<void> {
     const menu = toMenu(page.menu);
     const payload = new RebuildPageContainer({
-      containerTotalNum: page.containers.length,
+      containerTotalNum: containerCount(page),
       textObject: page.containers.map(toContainer),
+      ...(page.images?.length ? { imageObject: page.images.map(toImageContainer) } : {}),
       ...(menu ? { menuObject: menu } : {}),
     });
 

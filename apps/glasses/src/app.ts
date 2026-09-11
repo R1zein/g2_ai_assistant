@@ -19,9 +19,10 @@ import { Renderer } from './display/renderer';
 import { paginate } from './display/text';
 import { HostStorage } from './storage';
 import { STORAGE_KEYS } from './config';
-import { BODY_LINES, BODY_WIDTH, buildPage } from './screens/render';
+import { BODY_LINES, BODY_WIDTH, buildPage, photoImageSpec } from './screens/render';
 import { MENU, type Chrome, type View } from './screens/views';
 import { VoiceRecorder } from './voice';
+import { PhotoLibrary } from './photos';
 
 export type PanelListener = (state: PanelState) => void;
 
@@ -32,6 +33,17 @@ export interface PanelState {
   lastQuestion?: string;
   lastAnswer?: string;
   lastSources?: { title: string; url: string; host: string }[];
+  /** Current photo, so the panel can carry the linked attribution. */
+  photo?: {
+    photographer: string;
+    photographerUrl: string;
+    photoUrl: string;
+    imageUrl: string;
+    description?: string;
+    source: string;
+    sourceUrl: string;
+    position: string;
+  };
   agenda: AgendaItem[];
   voiceEnabled: boolean;
   mode: AssistantMode;
@@ -61,6 +73,9 @@ export class AssistantApp {
   private voiceEnabled = false;
 
   private agenda: AgendaItem[] = [];
+  private readonly library = new PhotoLibrary();
+  /** Which photo's pixels are currently on the glasses, if any. */
+  private pushedPhotoId: string | null = null;
   private mode: AssistantMode = 'fast';
   private apiKeyState: { hasOwnApiKey: boolean; apiKeyHint?: string; ready: boolean } = {
     hasOwnApiKey: false,
@@ -552,6 +567,10 @@ export class AssistantApp {
       case 'message':
         await this.show({ kind: 'agenda', items: this.agenda, page: 0 });
         return;
+      case 'photos':
+        // A tap advances the feed, the same as swiping down.
+        await this.turnPage(1);
+        return;
       default:
         return;
     }
@@ -570,6 +589,11 @@ export class AssistantApp {
       const next = (this.view.page + delta + totalPages) % totalPages;
       if (next === this.view.page) return;
       await this.show({ ...this.view, page: next });
+      return;
+    }
+
+    if (this.view.kind === 'photos' && this.view.cards.length > 0) {
+      await this.showPhoto(this.view.index + delta);
     }
   }
 
@@ -586,6 +610,9 @@ export class AssistantApp {
         await this.askText(
           'Give me a brief for the next 24 hours: what is coming up, anything I need to leave early for, and anything unusual.',
         );
+        return;
+      case MENU.photos:
+        await this.openPhotos();
         return;
       case MENU.toggleMode:
         await this.setMode(this.mode === 'deep' ? 'fast' : 'deep');
@@ -611,6 +638,7 @@ export class AssistantApp {
    * the phone panel shows.
    */
   private async setMode(mode: AssistantMode): Promise<void> {
+    this.pushedPhotoId = null;
     try {
       await api.setMode(mode);
       this.mode = mode;
@@ -684,17 +712,17 @@ export class AssistantApp {
 
   /* ---------------- rendering ---------------- */
 
-  private async show(view: View): Promise<void> {
+  private async show(view: View): Promise<{ rebuilt: boolean }> {
     this.view = view;
-    await this.paint();
+    return this.paint();
   }
 
-  private async paint(): Promise<void> {
+  private async paint(): Promise<{ rebuilt: boolean }> {
     this.emitPanel();
-    if (this.stopped) return;
+    if (this.stopped) return { rebuilt: false };
 
     try {
-      await this.renderer.render(
+      return await this.renderer.render(
         buildPage({
           view: this.view,
           chrome: this.chrome,
@@ -704,6 +732,71 @@ export class AssistantApp {
       );
     } catch (err) {
       this.log(`render failed: ${err instanceof Error ? err.message : 'error'}`);
+      return { rebuilt: false };
+    }
+  }
+
+  /* ---------------- photo feed ---------------- */
+
+  private async openPhotos(): Promise<void> {
+    await this.show({ kind: 'photos', cards: [], index: 0, status: 'loading' });
+
+    try {
+      if (this.library.size === 0) await this.library.load();
+      this.log(`photo feed: ${this.library.size} image(s)`);
+      await this.showPhoto(0);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not load the feed.';
+      this.log(`photo feed failed: ${message}`);
+      await this.show({ kind: 'photos', cards: [], index: 0, status: 'error', message });
+    }
+  }
+
+  /**
+   * Draws one photo.
+   *
+   * A rebuilt page clears every image container, so the pixels have to go out
+   * again whenever the layout changed — not only when the photo did.
+   */
+  private async showPhoto(index: number): Promise<void> {
+    const cards = this.library.photos;
+    if (cards.length === 0) return;
+
+    const wrapped = ((index % cards.length) + cards.length) % cards.length;
+    const card = cards[wrapped]!;
+
+    const cached = this.library.cached(card.id);
+    const { rebuilt } = await this.show({
+      kind: 'photos',
+      cards,
+      index: wrapped,
+      status: cached ? 'pushing' : 'loading',
+    });
+
+    if (rebuilt) this.pushedPhotoId = null;
+
+    try {
+      const frame = cached ?? (await this.library.frame(card.id));
+
+      // The wearer may have swiped on while the frame was downloading.
+      if (this.view.kind !== 'photos' || this.view.index !== wrapped) return;
+
+      if (this.pushedPhotoId !== card.id) {
+        await this.renderer.pushImage(photoImageSpec, frame.pixels);
+        this.pushedPhotoId = card.id;
+      }
+
+      if (this.view.kind === 'photos' && this.view.index === wrapped) {
+        await this.show({ kind: 'photos', cards, index: wrapped, status: 'ready' });
+      }
+
+      this.library.prefetchAround(wrapped);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not draw that photo.';
+      this.log(`photo ${card.id} failed: ${message}`);
+      if (this.view.kind === 'photos') {
+        await this.show({ kind: 'photos', cards, index: wrapped, status: 'error', message });
+      }
     }
   }
 
@@ -777,6 +870,25 @@ export class AssistantApp {
     }
   }
 
+  /** Attribution payload for the panel; Unsplash requires the links, not just names. */
+  private currentPhotoPanel(): PanelState['photo'] {
+    if (this.view.kind !== 'photos') return undefined;
+    const card = this.view.cards[this.view.index];
+    if (!card) return undefined;
+
+    const source = this.library.source;
+    return {
+      photographer: card.photographer,
+      photographerUrl: card.photographerUrl,
+      photoUrl: card.photoUrl,
+      imageUrl: card.imageUrl,
+      description: card.description,
+      source: source.source,
+      sourceUrl: source.sourceUrl,
+      position: `${this.view.index + 1} / ${this.view.cards.length}`,
+    };
+  }
+
   private log(line: string): void {
     const stamped = `${new Date().toLocaleTimeString()}  ${line}`;
     this.logLines.push(stamped);
@@ -792,6 +904,7 @@ export class AssistantApp {
       lastQuestion: this.lastAnswer?.question,
       lastAnswer: this.lastAnswer?.answer,
       lastSources: this.lastAnswer?.sources,
+      photo: this.currentPhotoPanel(),
       agenda: this.agenda,
       voiceEnabled: this.voiceEnabled,
       mode: this.mode,
