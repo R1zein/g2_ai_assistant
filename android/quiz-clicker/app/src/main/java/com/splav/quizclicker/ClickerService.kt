@@ -38,9 +38,9 @@ import kotlin.math.abs
  */
 class ClickerService : AccessibilityService() {
 
-    private enum class Phase { IDLE, ANSWER_TAPPED, SUBMIT_TAPPED, DONE }
+    private enum class Phase { IDLE, ANSWER_TAPPED, DONE }
 
-    private class TextNode(val text: String, val norm: String, val bounds: Rect)
+    private class TextNode(val text: String, val norm: String, val bounds: Rect, val node: AccessibilityNodeInfo)
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var windowManager: WindowManager
@@ -50,10 +50,12 @@ class ClickerService : AccessibilityService() {
     private var running = false
     private var answers: List<Answer> = emptyList()
 
-    private var currentKey: String? = null
+    private var current: Answer? = null
     private var phase = Phase.IDLE
     private var phaseTime = 0L
-    private var lastScan = 0L
+    private var attempt = 0
+    private var gestureBusy = false
+    private var lastSubmit = 0L
 
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -83,7 +85,7 @@ class ClickerService : AccessibilityService() {
         if (!running || event == null) return
         if (event.packageName == packageName) return
         // Страница поменялась — проверяем сразу, не дожидаясь таймера.
-        if (SystemClock.uptimeMillis() - lastScan >= MIN_EVENT_GAP_MS) scan()
+        scan()
     }
 
     // ---------------------------------------------------------------- старт/стоп
@@ -97,8 +99,9 @@ class ClickerService : AccessibilityService() {
             return
         }
         running = true
-        currentKey = null
+        current = null
         phase = Phase.IDLE
+        attempt = 0
         updateArrow()
         handler.removeCallbacks(pollRunnable)
         handler.post(pollRunnable)
@@ -116,7 +119,17 @@ class ClickerService : AccessibilityService() {
     // ---------------------------------------------------------------- логика
 
     private fun scan() {
-        lastScan = SystemClock.uptimeMillis()
+        // Быстрый путь: вопрос уже узнан, ждём появления вариантов — ищем только текст ответа
+        // одним запросом, без обхода всей страницы.
+        val q0 = current
+        if (q0 != null && phase == Phase.IDLE && attempt == 0) {
+            val hit = quickFind(q0)
+            if (hit != null) {
+                answer(q0, hit, submit = null)
+                return
+            }
+        }
+
         val nodes = collectTextNodes()
         if (nodes.isEmpty()) return
 
@@ -124,9 +137,10 @@ class ClickerService : AccessibilityService() {
         val q = answers.filter { it.normKey.isNotEmpty() && screen.contains(it.normKey) }
             .maxByOrNull { it.normKey.length } ?: return
 
-        if (q.normKey != currentKey) {
-            currentKey = q.normKey
+        if (q !== current) {
+            current = q
             phase = Phase.IDLE
+            attempt = 0
             Log.i(TAG, "Вопрос: ${q.key} -> ${q.answer}")
         }
         if (phase == Phase.DONE) return
@@ -143,29 +157,85 @@ class ClickerService : AccessibilityService() {
 
         when (phase) {
             Phase.IDLE -> {
-                val target = findAnswer(nodes, q) ?: slotFallback(q, submit) ?: return
-                tap(target.first, target.second)
-                phase = Phase.ANSWER_TAPPED
-                phaseTime = now
-            }
-            Phase.ANSWER_TAPPED -> {
-                if (submit != null && now - phaseTime >= SUBMIT_DELAY_MS) {
-                    tap(submit.bounds.exactCenterX(), submit.bounds.exactCenterY())
-                    phase = Phase.SUBMIT_TAPPED
+                val hit = findAnswer(nodes, q)
+                if (hit != null) {
+                    answer(q, hit, submit)
+                } else {
+                    val p = slotFallback(q, submit) ?: return
+                    gestureTap(p.first, p.second) { submit?.let { click(it.node, it.bounds, preferGesture = true) } }
+                    phase = Phase.ANSWER_TAPPED
                     phaseTime = now
-                } else if (now - phaseTime > RETRY_MS) {
-                    phase = Phase.IDLE // кнопки нет и ответ не принят — пробуем ещё раз
                 }
             }
-            Phase.SUBMIT_TAPPED -> {
-                if (now - phaseTime > RETRY_MS) phase = Phase.IDLE
+            Phase.ANSWER_TAPPED -> {
+                // «Отправлено» ещё нет — жмём «Отправить» на каждой проверке, пока кнопка активна.
+                if (submit != null && submit.node.isEnabled && !gestureBusy && now - lastSubmit >= SUBMIT_REPEAT_MS) {
+                    lastSubmit = now
+                    click(submit.node, submit.bounds, preferGesture = attempt % 2 == 1)
+                }
+                if (now - phaseTime > RETRY_MS) {
+                    phase = Phase.IDLE // ответ не принят — ещё раз, другим способом нажатия
+                    attempt++
+                }
             }
             Phase.DONE -> {}
         }
     }
 
+    /**
+     * Жмём вариант и сразу же «Отправить» в том же проходе. Клики через специальные
+     * возможности приходят в страницу по очереди, поэтому «Отправить» обработается уже
+     * после выбора варианта. Чётная попытка — клик по элементу, нечётная — жест.
+     */
+    private fun answer(q: Answer, hit: TextNode, submit: TextNode?) {
+        val useGesture = attempt % 2 == 1
+        val sub = submit ?: findSubmit()
+        if (useGesture) {
+            gestureTap(hit.bounds.exactCenterX(), hit.bounds.exactCenterY()) {
+                sub?.let { click(it.node, it.bounds, preferGesture = true) }
+            }
+        } else {
+            val viaGesture = click(hit.node, hit.bounds, preferGesture = false)
+            if (sub != null && !viaGesture) click(sub.node, sub.bounds, preferGesture = false)
+        }
+        phase = Phase.ANSWER_TAPPED
+        phaseTime = SystemClock.uptimeMillis()
+        lastSubmit = phaseTime
+        Log.i(TAG, "Ответ «${q.answer}», попытка $attempt")
+    }
+
+    /** Быстрый поиск текста ответа штатным поиском по тексту (один запрос к браузеру). */
+    private fun quickFind(q: Answer): TextNode? {
+        for (root in appRoots()) {
+            val found = try {
+                root.findAccessibilityNodeInfosByText(q.answer)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            val pool = found.mapNotNull { toTextNode(it) }
+            pickAnswer(pool, q)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findSubmit(): TextNode? {
+        for (root in appRoots()) {
+            for (label in Answers.SUBMIT_LABELS) {
+                val found = try {
+                    root.findAccessibilityNodeInfosByText(label)
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                found.mapNotNull { toTextNode(it) }.firstOrNull { it.norm == label }?.let { return it }
+            }
+        }
+        return null
+    }
+
     /** Ищем элемент с текстом правильного ответа: сначала точное совпадение, потом «содержит». */
-    private fun findAnswer(nodes: List<TextNode>, q: Answer): Pair<Float, Float>? {
+    private fun findAnswer(nodes: List<TextNode>, q: Answer): TextNode? = pickAnswer(nodes, q)
+
+    private fun pickAnswer(nodes: List<TextNode>, q: Answer): TextNode? {
         val exact = nodes.filter { it.norm == q.normAnswer }
         val pool = exact.ifEmpty {
             if (q.normAnswer.length < 4) emptyList()
@@ -175,8 +245,7 @@ class ClickerService : AccessibilityService() {
             }
         }
         // Самый маленький по площади — это сама строка варианта, а не контейнер вокруг.
-        val best = pool.minByOrNull { it.bounds.width().toLong() * it.bounds.height() } ?: return null
-        return best.bounds.exactCenterX() to best.bounds.exactCenterY()
+        return pool.minByOrNull { it.bounds.width().toLong() * it.bounds.height() }
     }
 
     /**
@@ -194,9 +263,8 @@ class ClickerService : AccessibilityService() {
         return submit.bounds.exactCenterX() to y
     }
 
-    private fun collectTextNodes(): List<TextNode> {
-        val out = ArrayList<TextNode>(128)
-        val roots = ArrayList<AccessibilityNodeInfo>()
+    private fun appRoots(): List<AccessibilityNodeInfo> {
+        val roots = ArrayList<AccessibilityNodeInfo>(2)
         try {
             windows?.forEach { w ->
                 if (w.type == AccessibilityWindowInfo.TYPE_APPLICATION) w.root?.let(roots::add)
@@ -204,37 +272,73 @@ class ClickerService : AccessibilityService() {
         } catch (_: Exception) {
         }
         if (roots.isEmpty()) rootInActiveWindow?.let(roots::add)
-        for (root in roots) {
-            if (root.packageName == packageName) continue
-            walk(root, out, 0)
-        }
+        roots.removeAll { it.packageName == packageName }
+        return roots
+    }
+
+    private fun collectTextNodes(): List<TextNode> {
+        val out = ArrayList<TextNode>(128)
+        for (root in appRoots()) walk(root, out, 0)
         return out
     }
 
     private fun walk(node: AccessibilityNodeInfo, out: MutableList<TextNode>, depth: Int) {
         if (depth > 60) return
-        val raw = node.text?.takeIf { it.isNotBlank() } ?: node.contentDescription?.takeIf { it.isNotBlank() }
-        if (raw != null && node.isVisibleToUser) {
-            val r = Rect()
-            node.getBoundsInScreen(r)
-            if (!r.isEmpty) {
-                val s = raw.toString()
-                out.add(TextNode(s, Answers.normalize(s), r))
-            }
-        }
+        toTextNode(node)?.let(out::add)
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             walk(child, out, depth + 1)
         }
     }
 
-    private fun tap(x: Float, y: Float) {
+    private fun toTextNode(node: AccessibilityNodeInfo): TextNode? {
+        val raw = node.text?.takeIf { it.isNotBlank() }
+            ?: node.contentDescription?.takeIf { it.isNotBlank() } ?: return null
+        if (!node.isVisibleToUser) return null
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        if (r.isEmpty) return null
+        val s = raw.toString()
+        return TextNode(s, Answers.normalize(s), r, node)
+    }
+
+    /**
+     * Клик по элементу через ACTION_CLICK — мгновенно и не зависит от того, где элемент
+     * на экране (даже во время анимации). Если браузер отказал — жест в центр.
+     * @return true, если пришлось нажимать жестом
+     */
+    private fun click(node: AccessibilityNodeInfo, bounds: Rect, preferGesture: Boolean): Boolean {
+        if (!preferGesture) {
+            var n: AccessibilityNodeInfo? = node
+            var target: AccessibilityNodeInfo = node
+            for (i in 0..4) {
+                val cur = n ?: break
+                if (cur.isClickable) { target = cur; break }
+                n = cur.parent
+            }
+            if (target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false
+        }
+        gestureTap(bounds.exactCenterX(), bounds.exactCenterY(), null)
+        return true
+    }
+
+    private fun gestureTap(x: Float, y: Float, then: (() -> Unit)?) {
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, TAP_MS))
             .build()
-        val ok = dispatchGesture(gesture, null, null)
-        Log.i(TAG, "tap(${x.toInt()}, ${y.toInt()}) ok=$ok")
+        gestureBusy = true
+        val ok = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(d: GestureDescription?) {
+                gestureBusy = false
+                then?.invoke()
+            }
+
+            override fun onCancelled(d: GestureDescription?) {
+                gestureBusy = false
+            }
+        }, handler)
+        if (!ok) gestureBusy = false
     }
 
     // ---------------------------------------------------------------- отладка
@@ -348,11 +452,10 @@ class ClickerService : AccessibilityService() {
 
     companion object {
         private const val TAG = "QuizClicker"
-        private const val POLL_MS = 60L
-        private const val MIN_EVENT_GAP_MS = 25L
-        private const val TAP_MS = 20L
-        private const val SUBMIT_DELAY_MS = 120L
-        private const val RETRY_MS = 1500L
+        private const val POLL_MS = 16L // один кадр при 60 Гц
+        private const val TAP_MS = 1L
+        private const val RETRY_MS = 700L
+        private const val SUBMIT_REPEAT_MS = 40L
 
         // Со скриншотов: кнопка «Отправить» высотой 84px, центр 4-го варианта на 134px выше
         // её центра, шаг между вариантами 122px.
