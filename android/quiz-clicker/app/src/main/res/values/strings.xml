@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Quiz Clicker</string>
+    <string name="service_name">Quiz Clicker — стрелка</string>
+    <string name="service_description">Показывает плавающую стрелку поверх экрана. После нажатия на неё читает вопрос на странице викторины и сам нажимает правильный ответ и кнопку «Отправить».</string>
+</resources>
