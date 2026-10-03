@@ -7,6 +7,9 @@ on:
       - ".github/workflows/quiz-clicker-apk.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,3 +36,16 @@ jobs:
         with:
           name: quiz-clicker-apk
           path: android/quiz-clicker/app/build/outputs/apk/release/*.apk
+
+      # Кладём готовый APK в ту же ветку (кроме main), чтобы его можно было скачать прямо из репозитория.
+      - name: Commit APK to branch
+        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+        working-directory: .
+        run: |
+          mkdir -p android/quiz-clicker/apk
+          cp android/quiz-clicker/app/build/outputs/apk/release/app-release.apk android/quiz-clicker/apk/QuizClicker.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add android/quiz-clicker/apk/QuizClicker.apk
+          git commit -m "Build QuizClicker.apk [skip ci]" || exit 0
+          git push origin HEAD:${{ github.ref_name }}
