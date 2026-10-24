@@ -1,4 +1,4 @@
-import { Bot, type Context, GrammyError } from 'grammy';
+import { Bot, type Context, GrammyError, InlineKeyboard } from 'grammy';
 import type { Chat, Message, User } from 'grammy/types';
 import type { BotConfig } from './config.js';
 import { logger } from './logger.js';
@@ -238,8 +238,11 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
 
     switch (cmd) {
       case 'start':
+        await ctx.reply(HOME_TEXT, { parse_mode: 'HTML', reply_markup: mainMenu() });
+        return;
+
       case 'help':
-        await ctx.reply(helpText(), { parse_mode: 'HTML' });
+        await ctx.reply(helpText(), { parse_mode: 'HTML', reply_markup: backMenu() });
         return;
 
       case 'status': {
@@ -551,6 +554,40 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
     }
   }
 
+  // Inline-menu navigation for the /start screen.
+  bot.on('callback_query:data', async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    if (!data.startsWith('menu:')) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const view = data.slice('menu:'.length);
+    let text = HOME_TEXT;
+    let keyboard = mainMenu();
+    if (view === 'help') {
+      text = helpText();
+      keyboard = backMenu();
+    } else if (view === 'ghost') {
+      text = GHOST_TEXT;
+      keyboard = backMenu();
+    } else if (view === 'status') {
+      text =
+        `📊 <b>Статус</b>\n\n` +
+        `Групп под наблюдением: ${store.listChats().length}\n` +
+        `Мутов в группах: ${store.listMutes().length}\n` +
+        `Business-подключений: ${store.listBizConnections().length}\n` +
+        `Перехвачено в личке: ${store.listBizCaptures(10_000).length}\n` +
+        `Сохранено медиа: ${store.listMedia(10_000).length}`;
+      keyboard = backMenu();
+    }
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err) {
+      if (!(err instanceof GrammyError)) log.warn('menu edit failed', err);
+    }
+    await ctx.answerCallbackQuery();
+  });
+
   // Greet newcomers where a welcome template is set.
   bot.on('message:new_chat_members', async (ctx) => {
     const chat = ctx.chat;
@@ -574,6 +611,37 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
 
   bot.catch((err) => log.error('bot error', err.error));
   return bot;
+}
+
+const HOME_TEXT =
+  '👋 <b>esgram</b>\n\n' +
+  'Я умею три вещи:\n' +
+  '• <b>модерировать группы</b> — админки, муты, баны, варны, приветствия;\n' +
+  '• <b>хранить медиа и правки</b> в чатах, куда меня добавили;\n' +
+  '• <b>гост-режим в личке</b> — ловить удалённые/изменённые сообщения и ' +
+  'одноразовые медиа через Telegram Business.\n\n' +
+  'Выбери раздел 👇';
+
+const GHOST_TEXT =
+  '👻 <b>Гост-режим (Telegram Business)</b>\n\n' +
+  'Нужен Telegram Premium. Подключение:\n' +
+  '1. Настройки → <b>Telegram для бизнеса</b> → <b>Чат-боты</b>.\n' +
+  '2. Впиши <code>esgram</code> и выдай права (как минимум «читать», для мута — «удалять»).\n\n' +
+  'После этого я сохраняю удалённые и изменённые сообщения в твоих личных чатах ' +
+  'и ловлю одноразовые медиа. Прочитанными я их не помечаю — ты остаёшься «в тени».\n\n' +
+  '<i>Если Telegram пишет «бот не поддерживает режим секретаря» — значит у бота ' +
+  'в @BotFather не включён Business Mode (это делает владелец бота).</i>';
+
+function mainMenu(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('ℹ️ Команды', 'menu:help')
+    .text('📊 Статус', 'menu:status')
+    .row()
+    .text('👻 Гост-режим', 'menu:ghost');
+}
+
+function backMenu(): InlineKeyboard {
+  return new InlineKeyboard().text('⬅️ Назад', 'menu:home');
 }
 
 function helpText(): string {

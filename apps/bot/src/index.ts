@@ -42,6 +42,7 @@ async function main(): Promise<void> {
     allowed_updates: [
       'message',
       'edited_message',
+      'callback_query',
       'my_chat_member',
       'business_connection',
       'business_message',
