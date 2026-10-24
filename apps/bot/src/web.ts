@@ -60,6 +60,33 @@ export function createWeb(cfg: BotConfig, store: BotStore): FastifyInstance {
     return reply.type(rec.mime).send(createReadStream(full));
   });
 
+  // --- business connection (ghost mode) -----------------------------------
+  app.get('/api/business', async () => store.listBizConnections());
+
+  app.get('/api/captures', async (req) => {
+    const limit = Number((req.query as Record<string, string>)?.limit ?? 100);
+    return store.listBizCaptures(Number.isFinite(limit) ? limit : 100);
+  });
+
+  app.get('/api/bizmutes', async () => store.listBizMutes());
+
+  app.post('/api/bizmutes/:conn/:peer/:on', async (req) => {
+    const { conn, peer, on } = req.params as { conn: string; peer: string; on: string };
+    const peerId = Number(peer);
+    if (on === 'true') {
+      const cap = store.listBizCaptures(1000).find((c) => c.peerChatId === peerId);
+      store.addBizMute({
+        connectionId: conn,
+        peerChatId: peerId,
+        peerName: cap?.peerName ?? String(peerId),
+        since: Date.now(),
+      });
+    } else {
+      store.removeBizMute(conn, peerId);
+    }
+    return { ok: true };
+  });
+
   return app;
 }
 
@@ -100,15 +127,20 @@ const token = new URLSearchParams(location.search).get('token') || '';
 const h = { 'x-bot-token': token };
 const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function j(u, o){ const r = await fetch(u, { ...o, headers: { ...h, ...(o&&o.headers) } }); return r.json(); }
+let bizMuted = new Set();
 async function load(){
-  const [chats, mutes, edits, media] = await Promise.all([
-    j('/api/chats'), j('/api/mutes'), j('/api/edits?limit=50'), j('/api/media?limit=50')
+  const [chats, mutes, edits, media, biz, caps, bmutes] = await Promise.all([
+    j('/api/chats'), j('/api/mutes'), j('/api/edits?limit=50'), j('/api/media?limit=50'),
+    j('/api/business'), j('/api/captures?limit=80'), j('/api/bizmutes')
   ]);
+  bizMuted = new Set(bmutes.map(m => m.connectionId+':'+m.peerChatId));
   const app = document.getElementById('app');
   app.innerHTML =
-    section('Чаты', chats.length ? chats.map(chatRow).join('') : empty()) +
-    section('Муты', mutes.length ? mutes.map(muteRow).join('') : empty()) +
-    section('Правки', edits.length ? edits.map(editRow).join('') : empty()) +
+    section('Чаты (группы)', chats.length ? chats.map(chatRow).join('') : empty()) +
+    section('Муты в группах', mutes.length ? mutes.map(muteRow).join('') : empty()) +
+    section('Правки в группах', edits.length ? edits.map(editRow).join('') : empty()) +
+    section('Business-подключения', biz.length ? biz.map(bizRow).join('') : emptyBiz()) +
+    section('Удалённые и изменённые (личка)', caps.length ? caps.map(capRow).join('') : empty()) +
     section('Архив медиа', media.length ? media.map(mediaRow).join('') : empty());
 }
 const section = (t, body) => '<h2>'+t+'</h2>'+body;
@@ -121,7 +153,16 @@ const editRow = e => '<div class="row"><div class="name"><b>'+esc(e.userName)+'<
   '<div class="diff"><del>'+esc(e.before)+'</del> → <ins>'+esc(e.after)+'</ins></div></div></div>';
 const mediaRow = x => '<div class="row"><div class="name"><b>'+esc(x.fromName)+'</b><span>'+x.kind+' · '+esc(x.chatTitle)+' · '+new Date(x.at).toLocaleString()+'</span>'+
   (x.caption?'<div>'+esc(x.caption)+'</div>':'')+'</div><a href="/api/media/'+x.id+'/file?token='+encodeURIComponent(token)+'" target="_blank">открыть</a></div>';
+const emptyBiz = () => '<p class="empty">нет подключений. В Telegram: Настройки → Telegram Business → Чат-боты (нужен Premium).</p>';
+const bizRow = c => '<div class="row"><div class="name"><b>'+esc(c.ownerName)+(c.isEnabled?'':' — выключено')+'</b>'+
+  '<span>чтение: '+(c.canReadMessages?'да':'нет')+' · удаление: '+(c.canDelete?'да':'нет')+'</span></div></div>';
+const capRow = c => { const on = bizMuted.has(c.connectionId+':'+c.peerChatId);
+  return '<div class="row"><div class="name"><b>'+(c.kind==='deleted'?'🗑 ':'✏️ ')+esc(c.peerName)+'</b>'+
+  '<span>'+new Date(c.at).toLocaleString()+'</span>'+
+  '<div class="diff">'+(c.before?'<del>'+esc(c.before)+'</del> → ':'')+'<ins>'+esc(c.text)+'</ins></div></div>'+
+  '<button class="'+(on?'on':'')+'" onclick="bmute(\''+c.connectionId+'\','+c.peerChatId+','+(!on)+')">'+(on?'размутить':'мут личка')+'</button></div>'; };
 async function flip(id, flag, val){ await j('/api/chats/'+id+'/'+flag+'/'+val, { method:'POST' }); load(); }
+async function bmute(conn, peer, on){ await j('/api/bizmutes/'+conn+'/'+peer+'/'+on, { method:'POST' }); load(); }
 load();
 </script>
 </body></html>`;

@@ -39,7 +39,15 @@ async function main(): Promise<void> {
   // start() resolves only when the bot stops; let it run in the background.
   void bot.start({
     onStart: (me) => log.info(`@${me.username} is live`),
-    allowed_updates: ['message', 'edited_message', 'my_chat_member'],
+    allowed_updates: [
+      'message',
+      'edited_message',
+      'my_chat_member',
+      'business_connection',
+      'business_message',
+      'edited_business_message',
+      'deleted_business_messages',
+    ],
   });
 }
 

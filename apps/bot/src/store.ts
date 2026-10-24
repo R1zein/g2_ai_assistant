@@ -49,15 +49,55 @@ export interface MediaRecord {
   at: number;
 }
 
+export interface BizConnection {
+  id: string;
+  /** Private chat with the owner who connected the bot to their account. */
+  userChatId: number;
+  ownerName: string;
+  canReadMessages: boolean;
+  canDelete: boolean;
+  isEnabled: boolean;
+  at: number;
+}
+
+/** A per-peer "mute" in the owner's own DMs: incoming messages get deleted. */
+export interface BizMute {
+  connectionId: string;
+  peerChatId: number;
+  peerName: string;
+  since: number;
+}
+
+export interface BizCapture {
+  connectionId: string;
+  kind: 'deleted' | 'edited';
+  peerChatId: number;
+  peerName: string;
+  text: string;
+  before?: string;
+  at: number;
+}
+
 interface Db {
   chats: Record<string, ChatConfig>;
   mutes: MuteRecord[];
   edits: EditRecord[];
   media: MediaRecord[];
+  bizConnections: Record<string, BizConnection>;
+  bizMutes: BizMute[];
+  bizCaptures: BizCapture[];
 }
 
 function empty(): Db {
-  return { chats: {}, mutes: [], edits: [], media: [] };
+  return {
+    chats: {},
+    mutes: [],
+    edits: [],
+    media: [],
+    bizConnections: {},
+    bizMutes: [],
+    bizCaptures: [],
+  };
 }
 
 /**
@@ -222,5 +262,58 @@ export class BotStore {
 
   getMedia(id: string): MediaRecord | undefined {
     return this.db.media.find((m) => m.id === id);
+  }
+
+  // --- business connections -----------------------------------------------
+
+  upsertBizConnection(conn: BizConnection): void {
+    this.db.bizConnections[conn.id] = conn;
+    this.save();
+  }
+
+  getBizConnection(id: string): BizConnection | undefined {
+    return this.db.bizConnections[id];
+  }
+
+  listBizConnections(): BizConnection[] {
+    return Object.values(this.db.bizConnections);
+  }
+
+  isBizMuted(connectionId: string, peerChatId: number): boolean {
+    return this.db.bizMutes.some(
+      (m) => m.connectionId === connectionId && m.peerChatId === peerChatId,
+    );
+  }
+
+  listBizMutes(): BizMute[] {
+    return this.db.bizMutes.slice();
+  }
+
+  addBizMute(record: BizMute): void {
+    if (this.isBizMuted(record.connectionId, record.peerChatId)) return;
+    this.db.bizMutes.push(record);
+    this.save();
+  }
+
+  removeBizMute(connectionId: string, peerChatId: number): boolean {
+    const before = this.db.bizMutes.length;
+    this.db.bizMutes = this.db.bizMutes.filter(
+      (m) => !(m.connectionId === connectionId && m.peerChatId === peerChatId),
+    );
+    const changed = this.db.bizMutes.length !== before;
+    if (changed) this.save();
+    return changed;
+  }
+
+  addBizCapture(record: BizCapture): void {
+    this.db.bizCaptures.push(record);
+    if (this.db.bizCaptures.length > this.editLogLimit * 4) {
+      this.db.bizCaptures = this.db.bizCaptures.slice(-this.editLogLimit * 4);
+    }
+    this.save();
+  }
+
+  listBizCaptures(limit = 100): BizCapture[] {
+    return this.db.bizCaptures.slice(-limit).reverse();
   }
 }

@@ -3,7 +3,9 @@ import type { Chat, Message, User } from 'grammy/types';
 import type { BotConfig } from './config.js';
 import { logger } from './logger.js';
 import { downloadFile, extractMedia } from './media.js';
+import { registerBusiness } from './business.js';
 import { BotStore } from './store.js';
+import { chatTitle, displayName, escapeHtml } from './util.js';
 
 const log = logger('bot');
 
@@ -35,16 +37,24 @@ const UNMUTED_PERMS = {
   can_add_web_page_previews: true,
 } as const;
 
-type CommandKind =
-  | 'mute'
-  | 'unmute'
-  | 'save'
-  | 'enable'
-  | 'disable'
-  | 'status'
-  | 'start'
-  | 'help'
-  | null;
+const SLASH_COMMANDS = [
+  'mute',
+  'unmute',
+  'save',
+  'ban',
+  'unban',
+  'kick',
+  'del',
+  'pin',
+  'unpin',
+  'enable',
+  'disable',
+  'status',
+  'start',
+  'help',
+] as const;
+
+type CommandKind = (typeof SLASH_COMMANDS)[number] | null;
 
 function parseCommand(raw: string): CommandKind {
   const body = raw.trim();
@@ -52,32 +62,17 @@ function parseCommand(raw: string): CommandKind {
   // Slash command, possibly addressed as /mute@esgrambot.
   if (body.startsWith('/')) {
     const token = lower.slice(1).split(/[\s@]/, 1)[0] ?? '';
-    if (['mute', 'unmute', 'save', 'enable', 'disable', 'status', 'start', 'help'].includes(token)) {
-      return token as CommandKind;
-    }
+    if ((SLASH_COMMANDS as readonly string[]).includes(token)) return token as CommandKind;
     return null;
   }
   // Bare keywords (require privacy mode OFF to reach the bot in groups).
   if (lower === 'мут') return 'mute';
   if (lower === 'анмут') return 'unmute';
+  if (lower === 'бан') return 'ban';
+  if (lower === 'разбан') return 'unban';
+  if (lower === 'кик') return 'kick';
   if (lower === 'сохрани' || lower === 'сохранить') return 'save';
   return null;
-}
-
-function displayName(user: User | undefined): string {
-  if (!user) return 'кто-то';
-  const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
-  return user.username ? `${name || user.username} (@${user.username})` : name || String(user.id);
-}
-
-function chatTitle(chat: Chat): string {
-  if ('title' in chat && chat.title) return chat.title;
-  if ('username' in chat && chat.username) return `@${chat.username}`;
-  return String(chat.id);
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** LRU-ish text cache so edits can show the previous version. */
@@ -267,8 +262,101 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
         await saveMedia(ctx, reply, media, from?.id ?? 0);
         return;
       }
+
+      // --- chat management (the bot acting as an admin) --------------------
+      case 'ban':
+      case 'unban':
+      case 'kick': {
+        if (isPrivate || !from) {
+          await ctx.reply('Это работает только в группе, где бот — админ.');
+          return;
+        }
+        if (!(await isAdmin(chat.id, from.id))) {
+          await ctx.reply('Только админ чата может это делать.');
+          return;
+        }
+        const target = reply?.from;
+        if (!target) {
+          await ctx.reply('Ответь этой командой на сообщение человека.');
+          return;
+        }
+        if (target.is_bot || (await isAdmin(chat.id, target.id))) {
+          await ctx.reply('Нельзя применить это к боту или другому админу.');
+          return;
+        }
+        await handleBan(ctx, chat, target, cmd);
+        await safeDelete(chat.id, msg.message_id);
+        return;
+      }
+
+      case 'del': {
+        if (isPrivate || !from) return;
+        if (!(await isAdmin(chat.id, from.id))) {
+          await ctx.reply('Только админ чата может удалять сообщения.');
+          return;
+        }
+        if (!reply) {
+          await ctx.reply('Ответь «/del» на сообщение, которое нужно удалить.');
+          return;
+        }
+        await safeDelete(chat.id, reply.message_id);
+        await safeDelete(chat.id, msg.message_id);
+        return;
+      }
+
+      case 'pin':
+      case 'unpin': {
+        if (isPrivate || !from) return;
+        if (!(await isAdmin(chat.id, from.id))) {
+          await ctx.reply('Только админ чата может закреплять сообщения.');
+          return;
+        }
+        try {
+          if (cmd === 'pin') {
+            if (!reply) {
+              await ctx.reply('Ответь «/pin» на сообщение, которое нужно закрепить.');
+              return;
+            }
+            await bot.api.pinChatMessage(chat.id, reply.message_id);
+          } else {
+            await bot.api.unpinChatMessage(chat.id, reply?.message_id);
+          }
+          await safeDelete(chat.id, msg.message_id);
+        } catch (err) {
+          await ctx.reply('Не вышло — у бота должно быть право закреплять сообщения.');
+          log.warn('pin/unpin failed', err);
+        }
+        return;
+      }
     }
   });
+
+  async function handleBan(
+    ctx: Context,
+    chat: Chat,
+    target: User,
+    action: 'ban' | 'unban' | 'kick',
+  ): Promise<void> {
+    const name = displayName(target);
+    try {
+      if (action === 'unban') {
+        await bot.api.unbanChatMember(chat.id, target.id);
+        await ctx.reply(`✅ ${escapeHtml(name)} разбанен.`, { parse_mode: 'HTML' });
+      } else if (action === 'kick') {
+        // Kick = ban then immediately unban, so the person can rejoin later.
+        await bot.api.banChatMember(chat.id, target.id);
+        await bot.api.unbanChatMember(chat.id, target.id, { only_if_banned: true });
+        await ctx.reply(`👢 ${escapeHtml(name)} исключён.`, { parse_mode: 'HTML' });
+      } else {
+        await bot.api.banChatMember(chat.id, target.id);
+        store.removeMute(chat.id, target.id);
+        await ctx.reply(`⛔ ${escapeHtml(name)} забанен.`, { parse_mode: 'HTML' });
+      }
+    } catch (err) {
+      await ctx.reply('Не вышло — у бота должно быть право «банить участников».');
+      log.warn(`${action} failed`, err);
+    }
+  }
 
   async function handleMute(
     ctx: Context,
@@ -334,6 +422,10 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
     }
   }
 
+  // Telegram Business handlers (ghost mode / anti-delete for the owner's own
+  // account) live in their own module and reuse the same store.
+  registerBusiness(bot, cfg, store);
+
   bot.catch((err) => log.error('bot error', err.error));
   return bot;
 }
@@ -341,11 +433,18 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
 function helpText(): string {
   return (
     '<b>esgram</b> — помощник для чатов.\n\n' +
-    'Добавь меня в группу и сделай админом (права: удалять сообщения, ограничивать участников).\n\n' +
+    'Добавь меня в группу и сделай админом (права: удалять сообщения, банить и ограничивать участников, закреплять).\n\n' +
     '<b>Правки.</b> Когда кто-то редактирует сообщение, я показываю «было → стало».\n' +
-    '<b>Архив.</b> Ответь на фото/видео/кружок словом «сохрани», или пришли медиа мне в личку — я его сохраню.\n' +
-    '<b>Мут.</b> Ответь на сообщение человека словом «Мут» (или /mute) — я заберу право писать и буду удалять его сообщения. «Анмут» — вернуть.\n\n' +
+    '<b>Архив.</b> Ответь на фото/видео/кружок словом «сохрани», или пришли медиа мне в личку.\n' +
+    '<b>Управление чатом</b> (ответом на сообщение, только для админов):\n' +
+    '• «Мут» / /mute — забрать право писать и удалять сообщения, «Анмут» — вернуть;\n' +
+    '• «Бан» / /ban, «Разбан» / /unban, «Кик» / /kick;\n' +
+    '• /del — удалить сообщение, /pin и /unpin — закрепить/открепить.\n\n' +
     'Команды: /status, /enable, /disable.\n\n' +
-    '<i>Я вижу только те чаты, куда меня добавили. Удалённые сообщения и одноразовые медиа Telegram ботам не отдаёт.</i>'
+    '<b>Гост-режим для своего аккаунта.</b> Подключи меня в Telegram → ' +
+    'Telegram Business → Чат-боты (нужен Premium). Тогда я сохраняю удалённые и ' +
+    'отредактированные сообщения в твоих личных чатах и ловлю одноразовые медиа.\n\n' +
+    '<i>В группах я вижу только те чаты, куда меня добавили. Удалённые сообщения ' +
+    'и one-time медиа в обычных чатах Telegram ботам не отдаёт — для этого и нужен Business.</i>'
   );
 }
