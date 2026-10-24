@@ -1,0 +1,17 @@
+# Always-on esgram bot. From apps/bot/:  docker compose up -d --build
+# Reads the repo-root .env (BOT_TOKEN etc.) and keeps data on the host.
+services:
+  esgram:
+    build:
+      context: ../..
+      dockerfile: apps/bot/Dockerfile
+    container_name: esgram
+    env_file: ../../.env
+    environment:
+      BOT_DATA_DIR: /app/data
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    ports:
+      # Web panel. Drop this line if you don't expose it.
+      - "8788:8788"

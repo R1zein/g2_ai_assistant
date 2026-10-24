@@ -1,0 +1,24 @@
+# systemd unit for running esgram without Docker.
+# 1. Put the repo at /opt/g2_ai_assistant and fill /opt/g2_ai_assistant/.env
+# 2. Build once:  cd /opt/g2_ai_assistant && npm ci && npm run build -w @g2/bot
+# 3. sudo cp apps/bot/deploy/esgram-bot.service /etc/systemd/system/
+#    sudo systemctl daemon-reload && sudo systemctl enable --now esgram-bot
+# Logs:  journalctl -u esgram-bot -f
+[Unit]
+Description=esgram Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/g2_ai_assistant
+EnvironmentFile=/opt/g2_ai_assistant/.env
+ExecStart=/usr/bin/node apps/bot/dist/index.js
+Restart=always
+RestartSec=3
+# Harden a little; drop these if they get in the way.
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

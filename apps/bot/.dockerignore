@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/build
+**/*.tsbuildinfo
+data
+**/data
+.env
+.env.*
+*.ehpk
+.git
+.DS_Store

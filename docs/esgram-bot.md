@@ -87,6 +87,45 @@ npm run start -w @g2/bot
 
 Панель (если задан `BOT_WEB_TOKEN`): `http://localhost:8788/?token=<BOT_WEB_TOKEN>`.
 
+## Постоянная работа (24/7)
+
+Боту нужен **всегда включённый хост** (VPS, домашний сервер) — там же, где
+крутятся другие твои боты. Он использует long polling (только исходящие
+соединения к `api.telegram.org`), поэтому ни домена, ни проброса портов для
+самого Telegram не требуется. Веб-панель — единственное входящее, пробрось её
+отдельно, если нужна снаружи.
+
+> Запускать можно только **один** экземпляр на токен: два параллельных процесса
+> дадут конфликт `getUpdates (409)`.
+
+### Вариант 1 — Docker (проще всего)
+
+```bash
+cd apps/bot
+docker compose up -d --build     # поднимется и будет перезапускаться сам
+docker compose logs -f           # логи
+```
+
+Токен берётся из корневого `.env`, данные — в `apps/bot/data` на хосте.
+
+### Вариант 2 — systemd (без Docker)
+
+```bash
+# репозиторий в /opt/g2_ai_assistant, заполнен /opt/g2_ai_assistant/.env
+cd /opt/g2_ai_assistant && npm ci && npm run build -w @g2/bot
+sudo cp apps/bot/deploy/esgram-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now esgram-bot
+journalctl -u esgram-bot -f
+```
+
+### Вариант 3 — PM2
+
+```bash
+npm ci && npm run build -w @g2/bot
+pm2 start apps/bot/dist/index.js --name esgram
+pm2 save && pm2 startup       # автозапуск после ребута
+```
+
 ### Настройка в группе
 
 1. Добавьте бота в группу.
