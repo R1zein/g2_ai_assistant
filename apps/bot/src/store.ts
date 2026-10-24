@@ -12,8 +12,29 @@ export interface ChatConfig {
   enabled: boolean;
   /** Repost a diff when someone edits a message. */
   trackEdits: boolean;
+  /** Greet users who join. */
+  welcomeEnabled: boolean;
+  welcomeText: string;
+  /** Warns needed before the auto-action fires. */
+  warnLimit: number;
   addedBy: number;
   addedAt: number;
+}
+
+export interface WarnRecord {
+  chatId: number;
+  userId: number;
+  userName: string;
+  count: number;
+  reasons: string[];
+  updatedAt: number;
+}
+
+export interface RepRecord {
+  chatId: number;
+  userId: number;
+  userName: string;
+  score: number;
 }
 
 export interface MuteRecord {
@@ -83,6 +104,8 @@ interface Db {
   mutes: MuteRecord[];
   edits: EditRecord[];
   media: MediaRecord[];
+  warns: WarnRecord[];
+  reps: RepRecord[];
   bizConnections: Record<string, BizConnection>;
   bizMutes: BizMute[];
   bizCaptures: BizCapture[];
@@ -94,6 +117,8 @@ function empty(): Db {
     mutes: [],
     edits: [],
     media: [],
+    warns: [],
+    reps: [],
     bizConnections: {},
     bizMutes: [],
     bizCaptures: [],
@@ -188,6 +213,9 @@ export class BotStore {
         type,
         enabled: true,
         trackEdits: true,
+        welcomeEnabled: false,
+        welcomeText: '',
+        warnLimit: 3,
         addedBy,
         addedAt: Date.now(),
       };
@@ -201,11 +229,76 @@ export class BotStore {
     return chat;
   }
 
-  setChatFlag(chatId: number, flag: 'enabled' | 'trackEdits', value: boolean): void {
+  setChatFlag(chatId: number, flag: 'enabled' | 'trackEdits' | 'welcomeEnabled', value: boolean): void {
     const chat = this.db.chats[String(chatId)];
     if (!chat) return;
     chat[flag] = value;
     this.save();
+  }
+
+  setWelcomeText(chatId: number, text: string): void {
+    const chat = this.db.chats[String(chatId)];
+    if (!chat) return;
+    chat.welcomeText = text;
+    chat.welcomeEnabled = text !== '';
+    this.save();
+  }
+
+  setWarnLimit(chatId: number, limit: number): void {
+    const chat = this.db.chats[String(chatId)];
+    if (!chat) return;
+    chat.warnLimit = limit;
+    this.save();
+  }
+
+  // --- warns ---------------------------------------------------------------
+
+  getWarn(chatId: number, userId: number): WarnRecord | undefined {
+    return this.db.warns.find((w) => w.chatId === chatId && w.userId === userId);
+  }
+
+  /** Add one warn (or `delta`) and return the new record. */
+  addWarn(chatId: number, userId: number, userName: string, reason: string): WarnRecord {
+    let rec = this.getWarn(chatId, userId);
+    if (!rec) {
+      rec = { chatId, userId, userName, count: 0, reasons: [], updatedAt: Date.now() };
+      this.db.warns.push(rec);
+    }
+    rec.count += 1;
+    rec.userName = userName;
+    rec.updatedAt = Date.now();
+    if (reason) rec.reasons.push(reason);
+    this.save();
+    return rec;
+  }
+
+  clearWarns(chatId: number, userId: number): boolean {
+    const before = this.db.warns.length;
+    this.db.warns = this.db.warns.filter((w) => !(w.chatId === chatId && w.userId === userId));
+    const changed = this.db.warns.length !== before;
+    if (changed) this.save();
+    return changed;
+  }
+
+  // --- reputation ----------------------------------------------------------
+
+  addRep(chatId: number, userId: number, userName: string, delta: number): RepRecord {
+    let rec = this.db.reps.find((r) => r.chatId === chatId && r.userId === userId);
+    if (!rec) {
+      rec = { chatId, userId, userName, score: 0 };
+      this.db.reps.push(rec);
+    }
+    rec.score += delta;
+    rec.userName = userName;
+    this.save();
+    return rec;
+  }
+
+  topReps(chatId: number, limit = 10): RepRecord[] {
+    return this.db.reps
+      .filter((r) => r.chatId === chatId)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   // --- mutes ---------------------------------------------------------------

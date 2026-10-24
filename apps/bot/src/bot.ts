@@ -4,6 +4,7 @@ import type { BotConfig } from './config.js';
 import { logger } from './logger.js';
 import { downloadFile, extractMedia } from './media.js';
 import { registerBusiness } from './business.js';
+import * as mod from './moderation.js';
 import { BotStore } from './store.js';
 import { chatTitle, displayName, escapeHtml } from './util.js';
 
@@ -47,6 +48,17 @@ const SLASH_COMMANDS = [
   'del',
   'pin',
   'unpin',
+  'admin',
+  'unadmin',
+  'title',
+  'warn',
+  'unwarn',
+  'warns',
+  'setwelcome',
+  'welcomeoff',
+  'rep',
+  'unrep',
+  'top',
   'enable',
   'disable',
   'status',
@@ -55,6 +67,13 @@ const SLASH_COMMANDS = [
 ] as const;
 
 type CommandKind = (typeof SLASH_COMMANDS)[number] | null;
+
+/** Everything after the first `/token` (the command's argument text). */
+function commandArgs(raw: string): string {
+  const body = raw.trim();
+  if (!body.startsWith('/')) return '';
+  return body.replace(/^\S+\s*/, '').trim();
+}
 
 function parseCommand(raw: string): CommandKind {
   const body = raw.trim();
@@ -71,6 +90,9 @@ function parseCommand(raw: string): CommandKind {
   if (lower === 'бан') return 'ban';
   if (lower === 'разбан') return 'unban';
   if (lower === 'кик') return 'kick';
+  if (lower === 'варн') return 'warn';
+  if (lower === 'спасибо' || lower === '+реп') return 'rep';
+  if (lower === '-реп') return 'unrep';
   if (lower === 'сохрани' || lower === 'сохранить') return 'save';
   return null;
 }
@@ -189,6 +211,30 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
     const cmd = parseCommand(text);
     if (!cmd) return;
     const reply = msg.reply_to_message;
+    const args = commandArgs(text);
+
+    // All of these management commands act on a replied-to user in a group,
+    // and only an admin may run them. Gate once, here.
+    const groupAdminCmds = ['admin', 'unadmin', 'title', 'warn', 'unwarn', 'warns', 'rep', 'unrep'];
+    if (groupAdminCmds.includes(cmd)) {
+      if (isPrivate || !from) {
+        await ctx.reply('Это работает только в группе.');
+        return;
+      }
+      // Reputation may be given by anyone; the rest need admin.
+      const needsAdmin = cmd !== 'rep' && cmd !== 'unrep';
+      if (needsAdmin && !(await isAdmin(chat.id, from.id))) {
+        await ctx.reply('Только админ чата может это делать.');
+        return;
+      }
+      const target = reply?.from;
+      if (!target) {
+        await ctx.reply('Ответь этой командой на сообщение человека.');
+        return;
+      }
+      await handleGroupAdmin(ctx, chat, from.id, target, cmd, args);
+      return;
+    }
 
     switch (cmd) {
       case 'start':
@@ -328,8 +374,91 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
         }
         return;
       }
+
+      case 'setwelcome':
+      case 'welcomeoff': {
+        if (isPrivate || !from) return;
+        if (!(await isAdmin(chat.id, from.id))) {
+          await ctx.reply('Только админ чата может менять приветствие.');
+          return;
+        }
+        if (cmd === 'welcomeoff') {
+          store.setChatFlag(chat.id, 'welcomeEnabled', false);
+          await ctx.reply('Приветствие выключено.');
+          return;
+        }
+        if (!args) {
+          await ctx.reply(
+            'Текст приветствия после команды. Плейсхолдеры: {name}, {username}, {title}.',
+          );
+          return;
+        }
+        store.setWelcomeText(chat.id, args);
+        await ctx.reply('Приветствие сохранено и включено.');
+        return;
+      }
+
+      case 'top': {
+        if (isPrivate) return;
+        await ctx.reply(mod.repTop(store, chat.id), { parse_mode: 'HTML' });
+        return;
+      }
     }
   });
+
+  async function handleGroupAdmin(
+    ctx: Context,
+    chat: Chat,
+    actorId: number,
+    target: User,
+    cmd: string,
+    args: string,
+  ): Promise<void> {
+    if (target.is_bot) {
+      await ctx.reply('К ботам это не применяется.');
+      return;
+    }
+    switch (cmd) {
+      case 'admin':
+        await ctx.reply(await mod.promote(bot, chat.id, target, args), { parse_mode: 'HTML' });
+        return;
+      case 'unadmin':
+        await ctx.reply(await mod.demote(bot, chat.id, target), { parse_mode: 'HTML' });
+        return;
+      case 'title':
+        if (!args) {
+          await ctx.reply('Укажи титул после команды: /title <текст>.');
+          return;
+        }
+        await ctx.reply(await mod.setTitle(bot, chat.id, target, args), { parse_mode: 'HTML' });
+        return;
+      case 'warn':
+        await ctx.reply(await mod.warn(bot, store, chat.id, target, args), { parse_mode: 'HTML' });
+        return;
+      case 'unwarn':
+        await ctx.reply(mod.unwarn(store, chat.id, target), { parse_mode: 'HTML' });
+        return;
+      case 'warns': {
+        const rec = store.getWarn(chat.id, target.id);
+        const limit = store.getChat(chat.id)?.warnLimit ?? 3;
+        await ctx.reply(
+          `Варны ${escapeHtml(displayName(target))}: ${rec?.count ?? 0}/${limit}.`,
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+      case 'rep':
+        if (target.id === actorId) {
+          await ctx.reply('Себе репутацию не поднять.');
+          return;
+        }
+        await ctx.reply(mod.rep(store, chat.id, target, 1), { parse_mode: 'HTML' });
+        return;
+      case 'unrep':
+        await ctx.reply(mod.rep(store, chat.id, target, -1), { parse_mode: 'HTML' });
+        return;
+    }
+  }
 
   async function handleBan(
     ctx: Context,
@@ -422,6 +551,23 @@ export function createBot(cfg: BotConfig, store: BotStore): Bot {
     }
   }
 
+  // Greet newcomers where a welcome template is set.
+  bot.on('message:new_chat_members', async (ctx) => {
+    const chat = ctx.chat;
+    const cfgChat = store.getChat(chat.id);
+    if (!cfgChat?.enabled || !cfgChat.welcomeEnabled || !cfgChat.welcomeText) return;
+    for (const member of ctx.message.new_chat_members) {
+      if (member.is_bot) continue;
+      try {
+        await ctx.reply(mod.renderWelcome(cfgChat.welcomeText, member, chat), {
+          parse_mode: 'HTML',
+        });
+      } catch (err) {
+        log.warn('welcome failed', err);
+      }
+    }
+  });
+
   // Telegram Business handlers (ghost mode / anti-delete for the owner's own
   // account) live in their own module and reuse the same store.
   registerBusiness(bot, cfg, store);
@@ -436,10 +582,13 @@ function helpText(): string {
     'Добавь меня в группу и сделай админом (права: удалять сообщения, банить и ограничивать участников, закреплять).\n\n' +
     '<b>Правки.</b> Когда кто-то редактирует сообщение, я показываю «было → стало».\n' +
     '<b>Архив.</b> Ответь на фото/видео/кружок словом «сохрани», или пришли медиа мне в личку.\n' +
-    '<b>Управление чатом</b> (ответом на сообщение, только для админов):\n' +
-    '• «Мут» / /mute — забрать право писать и удалять сообщения, «Анмут» — вернуть;\n' +
-    '• «Бан» / /ban, «Разбан» / /unban, «Кик» / /kick;\n' +
-    '• /del — удалить сообщение, /pin и /unpin — закрепить/открепить.\n\n' +
+    '<b>Управление чатом</b> (ответом на сообщение, для админов):\n' +
+    '• /admin [титул] — выдать админку, /unadmin — снять, /title <текст> — титул;\n' +
+    '• «Мут» / /mute, «Анмут» / /unmute; «Бан» / /ban, «Разбан» / /unban, «Кик» / /kick;\n' +
+    '• «Варн» / /warn [причина], /unwarn, /warns — варны с авто-мутом по лимиту;\n' +
+    '• /del — удалить, /pin и /unpin — закрепить/открепить;\n' +
+    '• /setwelcome <текст> ({name}, {username}, {title}), /welcomeoff — приветствие;\n' +
+    '• «Спасибо» / /rep (ответом) — репутация, /unrep, /top.\n\n' +
     'Команды: /status, /enable, /disable.\n\n' +
     '<b>Гост-режим для своего аккаунта.</b> Подключи меня в Telegram → ' +
     'Telegram Business → Чат-боты (нужен Premium). Тогда я сохраняю удалённые и ' +
