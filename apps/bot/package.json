@@ -1,0 +1,22 @@
+{
+  "name": "@g2/bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "dev": "tsc -p tsconfig.json && node --env-file-if-exists=../../.env --watch dist/index.js",
+    "start": "node --env-file-if-exists=../../.env dist/index.js"
+  },
+  "dependencies": {
+    "fastify": "^5.12.4",
+    "grammy": "^1.46.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.3"
+  }
+}
